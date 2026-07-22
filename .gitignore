@@ -1,5 +1,6 @@
 .omc/
-data/
+data/*
+!data/README.md
 results/
 __pycache__/
 *.pyc
