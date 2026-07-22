@@ -97,13 +97,19 @@ def spotcheck(embedder, index, ids, corpus, n):
                     samples.append((qa["question"], pid))
     random.seed(0)
     samples = random.sample(samples, min(n, len(samples)))
+    print(f"[스팟체크] 질의 {len(samples)}개 임베딩...", flush=True)
     qvecs = np.asarray(embedder.embed([q for q, _ in samples], is_query=True), dtype="float32")
     faiss.normalize_L2(qvecs)
     _, I = index.search(qvecs, 10)
-    hit = sum(1 for row, (_, gold) in zip(I, samples)
-              if gold in {ids[j]["paragraph_id"] for j in row})
-    print(f"[스팟체크] Recall@10 = {hit}/{len(samples)} = {hit/len(samples):.1%} "
-          f"({'통과' if hit/len(samples) >= 0.7 else '미달 → 한국어 특화 임베딩 교체 검토'})")
+    r1 = r5 = r10 = 0
+    for row, (_, gold) in zip(I, samples):
+        pids = [ids[j]["paragraph_id"] for j in row]
+        r1 += gold in pids[:1]
+        r5 += gold in pids[:5]
+        r10 += gold in pids[:10]
+    m = len(samples)
+    print(f"[스팟체크 n={m}] Recall@1={r1/m:.1%}  @5={r5/m:.1%}  @10={r10/m:.1%} "
+          f"({'통과' if r10 / m >= 0.7 else '미달 → 한국어 특화 임베딩 교체 검토'})")
 
 
 def selftest():

@@ -25,7 +25,7 @@ flowchart LR
 
 - [x] W0.1 KorQuAD 수율 체크 — 가정 2개 확인
 - [x] W1.1 코퍼스 구축 (KorQuAD 문서 범위, 10,615문단)
-- [x] W1.2 FAISS 인덱싱 (Upstage solar 임베딩) + 검색 스팟체크 Recall@10 20/20
+- [x] W1.2 FAISS 인덱싱 (Upstage solar 임베딩) + 검색 스팟체크 (단일홉 n=5000: R@1 83% · R@5 97% · R@10 98.5%)
 - [ ] W1.3 트리플 추출 → 지식그래프
 - [ ] W1.5 Baseline 측정 **(게이트)**
 - [ ] W2~W3 코어 파이프라인 · 검증 · 재질의
