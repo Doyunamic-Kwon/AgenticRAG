@@ -9,11 +9,15 @@ from openai import OpenAI
 
 
 class OpenAIEmbedder:
-    def __init__(self, api_key: str, base_url: str, model: str, dim: int, batch: int = 100):
+    def __init__(self, api_key: str, base_url: str, model: str, dim: int,
+                 batch: int = 32, max_chars: int = 5000):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.dim = dim
         self.batch = batch
+        # solar 임베딩 입력 한도 4000토큰. 한국어 ~0.55토큰/자라 5000자면 ~2750토큰(안전 마진).
+        # 초과 시 API가 400 에러(절단 아님) → 우리가 절단. 문단 0.1%만 해당(ADR-11).
+        self.max_chars = max_chars
         self._solar = "solar-embedding" in model   # -passage/-query 분기 대상
 
     def _model_for(self, is_query: bool) -> str:
@@ -23,6 +27,7 @@ class OpenAIEmbedder:
 
     def embed(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
         model = self._model_for(is_query)
+        texts = [t[:self.max_chars] for t in texts]   # 입력 한도 초과 방지 (ADR-11)
         out: list[list[float]] = []
         for i in range(0, len(texts), self.batch):
             resp = self.client.embeddings.create(model=model, input=texts[i:i + self.batch])

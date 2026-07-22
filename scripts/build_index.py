@@ -48,7 +48,10 @@ def make_embedder():
     assert api_key, f"{key_env} 없음 — .env 에 넣어주세요 (.env.example 참고)"
     assert "base_url" in ec, f"{prov} 는 OpenAI 호환이 아님 — 전용 어댑터 필요"
     from verihop.adapters.openai_embedder import OpenAIEmbedder
-    return OpenAIEmbedder(api_key, ec["base_url"], ec["model"], ec["dim"]), prov, ec
+    ecfg = c["embedding"]
+    embedder = OpenAIEmbedder(api_key, ec["base_url"], ec["model"], ec["dim"],
+                              batch=ecfg.get("batch", 32), max_chars=ecfg.get("max_chars", 5000))
+    return embedder, prov, ec
 
 
 def load_corpus():
@@ -69,7 +72,11 @@ def main(spotcheck_n):
         print("캐시된 임베딩 재사용 (vectors.npy). 제공자/모델 바꿨으면 data/index 삭제 후 재실행")
         vecs = np.load(cache)
     else:
-        vecs = np.asarray(embedder.embed(texts), dtype="float32")
+        acc, step = [], 500
+        for s in range(0, len(texts), step):
+            acc.extend(embedder.embed(texts[s:s + step]))
+            print(f"  임베딩 {min(s + step, len(texts))}/{len(texts)}", flush=True)
+        vecs = np.asarray(acc, dtype="float32")
     index = build_faiss(vecs, ids, out)
     print(f"인덱스 저장 → {out}  ({index.ntotal} vec, dim {index.d})")
 

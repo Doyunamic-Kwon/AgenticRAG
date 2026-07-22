@@ -8,6 +8,8 @@ llm:
   naver:   {model: HCX-DASH-001, base_url: "https://clovastudio.stream.ntruss.com"}
   openai:  {model: gpt-4o-mini,  base_url: "https://api.openai.com/v1"}
 embedding:                          # dim이 다르므로 제공자 바꾸면 인덱스 재생성 필요
+  batch: 32                         # 요청당 문단 수. Upstage 한도 미확정 → 보수적 안전값 (ADR-11)
+  max_chars: 5000                   # 입력당 절단 길이. solar 4000토큰 한도 방지 (ADR-11)
   upstage: {model: solar-embedding-1-large, dim: 4096, base_url: "https://api.upstage.ai/v1"}
   naver:   {model: bge-m3,                  dim: 1024}
   openai:  {model: text-embedding-3-small,  dim: 1536, base_url: "https://api.openai.com/v1"}
