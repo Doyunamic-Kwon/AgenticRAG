@@ -22,8 +22,10 @@ def _parse_json(text: str):
 
 class OpenAILLM:
     def __init__(self, api_key: str, base_url: str, model: str,
-                 temperature: float = 0.0, max_retries: int = 2):
-        self.client = OpenAI(api_key=api_key, base_url=base_url, max_retries=max_retries)
+                 temperature: float = 0.0, max_retries: int = 2, timeout: float = 60):
+        # timeout: 요청당 상한(초). 없으면 solar가 매달려 배치가 무한 정지(실측).
+        self.client = OpenAI(api_key=api_key, base_url=base_url,
+                             max_retries=max_retries, timeout=timeout)
         self.model = model
         self.temperature = temperature
 

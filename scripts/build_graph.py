@@ -114,6 +114,8 @@ def build(limit):
             edges += 1
         if i % 50 == 0:
             print(f"  {i}/{len(paras)} · 노드 {G.number_of_nodes()} 엣지 {edges}", flush=True)
+        if i % 100 == 0 and i > 0:
+            pickle.dump(G, open(ROOT / "data/graph.pkl", "wb"))    # 체크포인트(hang/kill 대비)
 
     pickle.dump(G, open(ROOT / "data/graph.pkl", "wb"))
     print(f"\n그래프 저장 → data/graph.pkl | 노드 {G.number_of_nodes()} 엣지 {G.number_of_edges()} "
