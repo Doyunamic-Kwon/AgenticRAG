@@ -1,0 +1,21 @@
+# relation 스키마. head_type --relation--> tail_type, direction=fwd가 이 방향.
+# W0.2에서 w0/relation_stats.json 실측으로 확정 (아래는 가설).
+relations:
+  - {name: bornIn,     head: PERSON,   tail: LOCATION, ko: ["태어난", "출생지", "출신"]}
+  - {name: diedIn,     head: PERSON,   tail: LOCATION, ko: ["사망한", "죽은 곳"]}
+  - {name: locatedIn,  head: LOCATION, tail: LOCATION, ko: ["속한", "위치한", "있는"]}
+  - {name: capitalOf,  head: LOCATION, tail: LOCATION, ko: ["수도"]}
+  - {name: nationality,head: PERSON,   tail: LOCATION, ko: ["국적", "국가의"]}
+  - {name: studiedAt,  head: PERSON,   tail: ORG,      ko: ["공부한", "졸업한", "출신 학교"]}
+  - {name: memberOf,   head: PERSON,   tail: ORG,      ko: ["소속", "가입한"]}
+  - {name: createdBy,  head: WORK,     tail: PERSON,   ko: ["만든", "작곡한", "쓴", "감독한"]}
+  - {name: teacherOf,  head: PERSON,   tail: PERSON,   ko: ["스승", "제자", "가르친"]}
+  - {name: occupation, head: PERSON,   tail: TERM,     ko: ["직업", "활동한 분야"]}
+fallback: relatedTo        # 스키마 밖 → 검증 약화 모드(backlink 생략)
+types: [PERSON, LOCATION, ORG, DATE, NUMBER, WORK, TERM]
+operators:
+  EARLIER: {in_type: DATE}
+  LATER:   {in_type: DATE}
+  GREATER: {in_type: NUMBER}
+  SMALLER: {in_type: NUMBER}
+  SAME:    {in_type: any, out: yesno}

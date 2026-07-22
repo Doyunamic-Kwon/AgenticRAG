@@ -1,0 +1,28 @@
+llm:
+  model: gpt-4o-mini
+  temperature: 0.0
+  max_retries: 2
+embedding:
+  model: text-embedding-3-small     # W1.2 스팟체크 미달 시 한국어 특화로 교체
+retrieval:
+  top_k_paragraphs: 10               # Recall@10 계산 위해 ≥ max(k). LLM 후보추출도 이 상한 (C3)
+  use_hyde_definition: true          # sub_query + expected.definition 결합 임베딩
+grounding:
+  theta_high: 0.90                   # 스냅 확정 (무보정값 — W1.2에서 relation 임베딩 실측 보정 필요)
+  theta_low: 0.75                    # 미만이면 포기 + 힌트
+verification:
+  pass_ratio: 0.75                   # 시행 검사 통과 비율. 단 backlink="contradict"는 pass_ratio 무관 hard-veto (03 §0/C1)
+  theta_desc: 0.60
+  score_lambda: 0.3                  # 벡터 유사도 가중
+execution:
+  max_requery: 2
+  max_depth: 3
+  max_hops_total: 5
+  tie_epsilon: 0.15                  # margin < ε → tie
+  max_active_chains: 3
+  memoize: true                      # [4] 검색결과만 캐시 (C6)
+paths:
+  corpus: data/corpus.jsonl
+  chroma_dir: data/chroma
+  graph_pickle: data/graph.pkl
+  alias: data/alias.json
