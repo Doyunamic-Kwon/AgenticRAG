@@ -9,7 +9,7 @@
 usage: python3 scripts/build_2wiki_ko.py --n 10
 out: data/eval/multihop_2wiki.jsonl + data/corpus_2wiki.jsonl
 """
-import sys, os, json, argparse, urllib.request, urllib.parse
+import sys, os, json, time, argparse, urllib.request, urllib.parse, urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,17 +41,33 @@ JSON만: {{"question": "한국어 질문", "answer_ko": "최종 답의 자연스
 _cache = {}
 
 
+def _fetch(url, tries=5, throttle=0.1):
+    """429/일시오류 백오프 재시도. 성공 시 dict, 실패 시 None."""
+    for i in range(tries):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
+                d = json.load(r)
+            time.sleep(throttle)
+            return d
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and i < tries - 1:
+                time.sleep(2 ** i)          # 1,2,4,8s
+                continue
+            return None
+        except Exception:
+            if i < tries - 1:
+                time.sleep(1)
+                continue
+            return None
+
+
 def wiki_get(host, params):
     params = {**params, "format": "json"}
     url = f"https://{host}/w/api.php?" + urllib.parse.urlencode(params)
     if url in _cache:
         return _cache[url]
-    try:
-        d = json.load(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=15))
-    except Exception:
-        d = None
-    _cache[url] = d
-    return d
+    _cache[url] = _fetch(url)
+    return _cache[url]
 
 
 def ko_title(en_title):
@@ -77,8 +93,9 @@ def ko_intro(ko_t):
 def fetch_rows(pages):
     rows = []
     for off in range(0, pages * 100, 100):
-        d = json.load(urllib.request.urlopen(
-            urllib.request.Request(f"{ROWS_API}&offset={off}&length=100", headers=UA), timeout=30))
+        d = _fetch(f"{ROWS_API}&offset={off}&length=100", throttle=0.5)
+        if not d:
+            print(f"  rows fetch 중단(off={off})"); break
         got = d.get("rows", [])
         rows += [r["row"] for r in got]
         if len(got) < 100:
