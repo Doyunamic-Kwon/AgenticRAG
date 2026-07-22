@@ -21,8 +21,8 @@
 - [W1.6] 멀티홉 평가셋 구축 착수 (브릿지 쌍 → 질문 합성·검수, 05_평가_명세 스키마 준수) / (W0.1)
 
 ## W2. 코어 모듈 (Day 3~4)
-- [W2.1] 뼈대: configs 로더, models.py(명세 §0), trace / (없음)
-- [W2.2] infra: llm.py(재시도·캐싱·비용집계 단일 관문), embeddings, vector_store, graph_store(GraphStore Protocol+NetworkX) / (W1.3)
+- [W2.1] 뼈대: settings.py(configs 로더), models.py(§0), ports.py(5 Protocol), domain/(plan_rules·verify_rules 순수 함수) / (없음)
+- [W2.2] adapters: openai_llm.py(재시도·캐싱·비용집계 단일 관문), openai_embedder, chroma_index, networkx_graph(GraphPort+NetworkX), json_tracer, memo_cache / (W1.3)
 - [W2.3] 교정 [0] L1~L3 / (W1.4) ✓ 오타 샘플 20개 중 L3까지 회수 ≥70%
 - [W2.4] 분해 [1] + 계획 검증 8종 [2] / (W2.1) ✓ 시나리오 A/B/C 질문의 분해 JSON 수검수 통과
 - [W2.5] 그라운딩 [3] / (W2.2) ✓ exact/스냅/타이브레이크/포기 4경로 단위테스트
