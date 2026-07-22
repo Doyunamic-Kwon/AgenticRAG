@@ -1,9 +1,17 @@
+providers:                          # 무료 테스트 우선. openai는 후순위(유료·성능 미달 시만)
+  llm: upstage                      # upstage | naver | openai
+  embedding: upstage
 llm:
-  model: gpt-4o-mini
   temperature: 0.0
   max_retries: 2
-embedding:
-  model: text-embedding-3-small     # W1.2 스팟체크 미달 시 한국어 특화로 교체
+  upstage: {model: solar-pro,    base_url: "https://api.upstage.ai/v1"}   # OpenAI 호환
+  naver:   {model: HCX-DASH-001, base_url: "https://clovastudio.stream.ntruss.com"}
+  openai:  {model: gpt-4o-mini,  base_url: "https://api.openai.com/v1"}
+embedding:                          # dim이 다르므로 제공자 바꾸면 인덱스 재생성 필요
+  upstage: {model: solar-embedding-1-large, dim: 4096, base_url: "https://api.upstage.ai/v1"}
+  naver:   {model: bge-m3,                  dim: 1024}
+  openai:  {model: text-embedding-3-small,  dim: 1536, base_url: "https://api.openai.com/v1"}
+  # solar-embedding: 문서는 ...-passage, 질의는 ...-query 변형 사용 (embedder 어댑터에서 분기)
 retrieval:
   top_k_paragraphs: 10               # Recall@10 계산 위해 ≥ max(k). LLM 후보추출도 이 상한 (C3)
   use_hyde_definition: true          # sub_query + expected.definition 결합 임베딩
