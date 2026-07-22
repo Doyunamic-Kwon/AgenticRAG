@@ -33,13 +33,35 @@ def main():
                 for a in h.get("target_aliases", []):
                     alias.setdefault(a, h["target"])
 
-    # 그래프 노드도 엔티티로 추가(있으면)
+    # 그래프 노드도 엔티티로 추가 + eval 엔티티명 링킹(표기차 흡수)
     gp = ROOT / "data/graph.pkl"
     if gp.exists():
         import pickle
         G = pickle.load(open(gp, "rb"))
         for n in G.nodes:
             alias.setdefault(n, n)
+        # 링킹 휴리스틱: eval 엔티티명이 그래프 노드에 부분포함되면 연결
+        # ("존 레논"→"존 윈스턴 오노 레논", "제퍼슨"↔"토머스 제퍼슨"). backlink 검증 위해.
+        eval_names = set()
+        if mh.exists():
+            for l in open(mh, encoding="utf-8"):
+                g = json.loads(l)
+                eval_names.add(g["answer"])
+                for h in g["hops"]:
+                    eval_names.add(h["target"])
+        node_toks = [(n, set(n.split())) for n in G.nodes]
+        linked = 0
+        for ev in eval_names:
+            if ev in G:
+                continue
+            et = set(ev.split())
+            if len(et) < 2:                          # 단일 토큰은 과링킹 위험 → exact만
+                continue
+            hit = next((n for n, nt in node_toks if n != ev and (et <= nt or nt <= et)), None)
+            if hit:
+                alias[ev] = hit
+                linked += 1
+        print(f"  그래프 노드 {G.number_of_nodes()} 병합 · eval 링킹 {linked}건")
 
     out = ROOT / "data/alias.json"
     json.dump(alias, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=0)
