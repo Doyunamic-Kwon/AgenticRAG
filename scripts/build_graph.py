@@ -38,15 +38,16 @@ EXTRACT_PROMPT = """아래 문단에서 다음 관계의 사실만 (head, relati
 {schema}
 
 규칙:
-- 문단에 명시된 사실만. 추측·상식 보완 금지.
-- **타입·방향이 스키마와 맞아야 한다. 안 맞으면 그 트리플을 넣지 마라.**
-  (예: capitalOf의 head는 도시여야 한다. createdBy의 head는 작품이고 사람이 아니다.)
+- **오직 문단에 문장으로 쓰여 있는 사실만. 너의 사전지식으로 채우지 마라.**
+  각 트리플에 근거 문장(evidence)을 넣되, 문단의 한 문장을 '...' 축약·생략 없이 통째로 그대로 복사하라.
+  복사할 문장이 없으면 그 트리플을 넣지 마라.
+- **타입·방향이 스키마와 맞아야 한다. 안 맞으면 넣지 마라.**
+  (예: capitalOf의 head는 도시. createdBy의 head는 작품이고 사람이 아니다.)
 - head/tail은 고유명사 엔티티. 대명사·일반명사·연도 금지.
-- 확실한 핵심 사실만. 애매하면 제외. 없으면 빈 목록.
 
 문단: {text}
 
-JSON만: {{"triples": [{{"head": "...", "relation": "createdBy", "tail": "..."}}]}}"""
+JSON만: {{"triples": [{{"head": "...", "relation": "createdBy", "tail": "...", "evidence": "문단에서 그대로 복사한 문장"}}]}}"""
 
 VERIFY_PROMPT = """문단이 다음 트리플을 실제로 뒷받침하는가?
 트리플: ({h}) --{r}--> ({t})   (의미: {desc})
@@ -90,29 +91,33 @@ def build(limit):
     print(f"트리플 추출 대상 {len(paras)}문단 (main {limit} + 2wiki)")
 
     G = nx.DiGraph()
-    edges = conflicts = 0
+    edges = conflicts = dropped = 0
     for i, p in enumerate(paras):
         try:
             out = llm.complete(EXTRACT_PROMPT.format(schema=SCHEMA_DESC, text=p["text"][:2000]), schema=True)
         except Exception as e:
             print(f"  skip {p['paragraph_id']}: {e}"); continue
+        norm = " ".join(p["text"].split())
         for t in (out.get("triples") or []) if isinstance(out, dict) else []:
             r, h, tl = t.get("relation"), (t.get("head") or "").strip(), (t.get("tail") or "").strip()
             if r not in schema or not h or not tl or h == tl:
                 continue
+            ev = " ".join((t.get("evidence") or "").split())
+            if len(ev) < 8 or ev not in norm:         # 근거 문장이 문단에 없으면 폐기 (그라운딩 강제)
+                dropped += 1; continue
             for node, typ in [(h, rel[r][0]), (tl, rel[r][1])]:
                 if node not in G:
                     G.add_node(node, type=typ)
                 elif G.nodes[node]["type"] != typ:
                     conflicts += 1                    # 타입 충돌(finding #10): 첫 타입 유지
-            G.add_edge(h, tl, relation=r, source_paragraph_id=p["paragraph_id"])
+            G.add_edge(h, tl, relation=r, source_paragraph_id=p["paragraph_id"], evidence=ev)
             edges += 1
         if i % 50 == 0:
             print(f"  {i}/{len(paras)} · 노드 {G.number_of_nodes()} 엣지 {edges}", flush=True)
 
     pickle.dump(G, open(ROOT / "data/graph.pkl", "wb"))
     print(f"\n그래프 저장 → data/graph.pkl | 노드 {G.number_of_nodes()} 엣지 {G.number_of_edges()} "
-          f"(타입충돌 {conflicts})")
+          f"(타입충돌 {conflicts}, 근거없어 폐기 {dropped})")
     from collections import Counter
     rc = Counter(d["relation"] for _, _, d in G.edges(data=True))
     print("관계 분포:", dict(rc.most_common()))
