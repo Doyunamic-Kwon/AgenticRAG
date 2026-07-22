@@ -39,7 +39,8 @@ def load_index(c):
 def load_eval(which, limit):
     """returns [{qid, question, gold:set(pid)}]."""
     if which == "multi":
-        rows = [json.loads(l) for l in open(ROOT / "data/eval/multihop.jsonl", encoding="utf-8")]
+        # 2Wiki 적응 gold (깨끗한 셋). KorQuAD 브릿지 초판(multihop.jsonl)은 품질 미달로 미사용.
+        rows = [json.loads(l) for l in open(ROOT / "data/eval/multihop_2wiki.jsonl", encoding="utf-8")]
         return [{"qid": r["qid"], "question": r["question"],
                  "gold": {r["hops"][-1]["evidence_paragraph"]}} for r in rows]
     if which == "single":

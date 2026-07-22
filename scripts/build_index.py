@@ -55,7 +55,13 @@ def make_embedder():
 
 
 def load_corpus():
-    corpus = [json.loads(l) for l in open(ROOT / "data/corpus.jsonl", encoding="utf-8")]
+    files = [ROOT / "data/corpus.jsonl"]
+    extra = ROOT / "data/corpus_2wiki.jsonl"          # 2Wiki gold 문단 증분(있으면 병합)
+    if extra.exists():
+        files.append(extra)
+    corpus = []
+    for fp in files:
+        corpus += [json.loads(l) for l in open(fp, encoding="utf-8")]
     texts = [c["text"] for c in corpus]
     ids = [{"paragraph_id": c["paragraph_id"], "doc_title": c["doc_title"]} for c in corpus]
     return corpus, texts, ids
@@ -67,13 +73,21 @@ def main(spotcheck_n):
     corpus, texts, ids = load_corpus()
     print(f"임베딩 {len(texts)}문단 ({prov}/{ec['model']}, dim {ec['dim']})...")
 
+    # 증분 캐시: corpus.jsonl 불변 가정으로 앞부분 재사용, 뒤(2Wiki 증분)만 임베딩.
+    # 제공자/모델 바꿨거나 corpus.jsonl이 바뀌었으면 data/index 삭제 후 재실행.
     cache = out / "vectors.npy"
-    if cache.exists() and np.load(cache).shape[0] == len(texts):
-        print("캐시된 임베딩 재사용 (vectors.npy). 제공자/모델 바꿨으면 data/index 삭제 후 재실행")
-        vecs = np.load(cache)
+    cached = np.load(cache) if cache.exists() else None
+    m = cached.shape[0] if cached is not None else 0
+    if m == len(texts) and m > 0:
+        print(f"캐시된 임베딩 전량 재사용 ({m})")
+        vecs = cached
     else:
-        acc, step = [], 500
-        for s in range(0, len(texts), step):
+        start = m if (cached is not None and 0 < m < len(texts)) else 0
+        if start:
+            print(f"증분 임베딩 {len(texts) - start}개 (기존 {start} 재사용)")
+        acc = [row for row in cached[:start]] if start else []
+        step = 500
+        for s in range(start, len(texts), step):
             acc.extend(embedder.embed(texts[s:s + step]))
             print(f"  임베딩 {min(s + step, len(texts))}/{len(texts)}", flush=True)
         vecs = np.asarray(acc, dtype="float32")
