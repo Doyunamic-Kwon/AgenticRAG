@@ -1,0 +1,6 @@
+# python 3.14 / .venv. 설치: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+numpy
+openai            # OpenAI 호환 API (Upstage solar 포함)
+pyyaml            # configs 로드
+python-dotenv     # .env
+faiss-cpu         # 벡터 인덱스 (flat, exact)

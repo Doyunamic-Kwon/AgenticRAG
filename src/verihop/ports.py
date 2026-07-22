@@ -14,8 +14,9 @@ class LLMPort(Protocol):
 
 
 class EmbedderPort(Protocol):
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """임베딩 + 캐시. 코사인 계산은 호출측(usecase)에서."""
+    def embed(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
+        """임베딩 + 캐시. 코사인 계산은 호출측(usecase)에서.
+        is_query: solar 등 문서/질의 임베딩 모델이 다른 경우 분기."""
         ...
 
 
