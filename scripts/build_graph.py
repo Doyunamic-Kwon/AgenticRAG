@@ -7,11 +7,16 @@
 
 usage:
   python3 scripts/build_graph.py --limit 500          # main 코퍼스 샘플 + 2wiki 전량
+  python3 scripts/build_graph.py --all --workers 12    # 전체 코퍼스, 동시 12개 (재개 가능)
   python3 scripts/build_graph.py --verify 30           # 기존 그래프에서 30엣지 정확도 샘플(수검수 대체)
+
+재개: 기존 그래프의 G.graph['processed_pids']에 있는 문단은 스킵한다(엣지 0개로 끝난 문단도 포함) —
+전체 코퍼스로 확장할 때 이미 처리한 552문단을 다시 돌리지 않는다.
 out: data/graph.pkl
 """
-import sys, os, json, argparse, random, pickle
+import sys, os, json, argparse, random, pickle, time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -73,53 +78,80 @@ def load_relations():
     return {x["name"]: (x["head"], x["tail"]) for x in r["relations"]}
 
 
-def load_paras(limit):
+def load_paras(limit, all_paras):
     main = [json.loads(l) for l in open(ROOT / "data/corpus.jsonl", encoding="utf-8")]
     random.seed(0); random.shuffle(main)
-    paras = main[:limit]
+    paras = main if all_paras else main[:limit]
     extra = ROOT / "data/corpus_2wiki.jsonl"
     if extra.exists():                                # 2wiki gold 문서는 전량(eval 관련)
         paras += [json.loads(l) for l in open(extra, encoding="utf-8")]
     return paras
 
 
-def build(limit):
+def _extract_one(llm, p):
+    """워커 스레드에서 실행. 성공 시 (p, triples), 실패 시 (p, None)."""
+    try:
+        out = llm.complete(EXTRACT_PROMPT.format(schema=SCHEMA_DESC, text=p["text"][:2000]), schema=True)
+        return p, (out.get("triples") or []) if isinstance(out, dict) else []
+    except Exception as e:
+        return p, None
+
+
+def build(limit, all_paras=False, workers=8, checkpoint_every=200):
     llm = make_llm()
     rel = load_relations()
     schema = set(rel)
-    paras = load_paras(limit)
-    print(f"트리플 추출 대상 {len(paras)}문단 (main {limit} + 2wiki)")
+    paras = load_paras(limit, all_paras)
 
-    G = nx.DiGraph()
-    edges = conflicts = dropped = 0
-    for i, p in enumerate(paras):
-        try:
-            out = llm.complete(EXTRACT_PROMPT.format(schema=SCHEMA_DESC, text=p["text"][:2000]), schema=True)
-        except Exception as e:
-            print(f"  skip {p['paragraph_id']}: {e}"); continue
-        norm = " ".join(p["text"].split())
-        for t in (out.get("triples") or []) if isinstance(out, dict) else []:
-            r, h, tl = t.get("relation"), (t.get("head") or "").strip(), (t.get("tail") or "").strip()
-            if r not in schema or not h or not tl or h == tl:
-                continue
-            ev = " ".join((t.get("evidence") or "").split())
-            if len(ev) < 8 or ev not in norm:         # 근거 문장이 문단에 없으면 폐기 (그라운딩 강제)
-                dropped += 1; continue
-            for node, typ in [(h, rel[r][0]), (tl, rel[r][1])]:
-                if node not in G:
-                    G.add_node(node, type=typ)
-                elif G.nodes[node]["type"] != typ:
-                    conflicts += 1                    # 타입 충돌(finding #10): 첫 타입 유지
-            G.add_edge(h, tl, relation=r, source_paragraph_id=p["paragraph_id"], evidence=ev)
-            edges += 1
-        if i % 50 == 0:
-            print(f"  {i}/{len(paras)} · 노드 {G.number_of_nodes()} 엣지 {edges}", flush=True)
-        if i % 100 == 0 and i > 0:
-            pickle.dump(G, open(ROOT / "data/graph.pkl", "wb"))    # 체크포인트(hang/kill 대비)
+    gpath = ROOT / "data/graph.pkl"
+    if gpath.exists():                                # 재개: 이미 처리한 문단(엣지 0개 포함) 스킵
+        G = pickle.load(open(gpath, "rb"))
+        processed = G.graph.setdefault("processed_pids", set())
+    else:
+        G = nx.DiGraph()
+        G.graph["processed_pids"] = processed = set()
 
-    pickle.dump(G, open(ROOT / "data/graph.pkl", "wb"))
+    todo = [p for p in paras if p["paragraph_id"] not in processed]
+    print(f"대상 {len(paras)}문단 · 이미 처리 {len(processed)} · 남은 작업 {len(todo)} · 동시 {workers}")
+    if not todo:
+        print("추가로 처리할 문단 없음."); pickle.dump(G, open(gpath, "wb")); return
+
+    edges = conflicts = dropped = errors = 0
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(_extract_one, llm, p): p for p in todo}
+        for i, fut in enumerate(as_completed(futures), 1):
+            p, triples = fut.result()
+            processed.add(p["paragraph_id"])
+            if triples is None:
+                errors += 1
+            else:
+                norm = " ".join(p["text"].split())
+                for t in triples:
+                    r, h, tl = t.get("relation"), (t.get("head") or "").strip(), (t.get("tail") or "").strip()
+                    if r not in schema or not h or not tl or h == tl:
+                        continue
+                    ev = " ".join((t.get("evidence") or "").split())
+                    if len(ev) < 8 or ev not in norm:     # 근거 문장이 문단에 없으면 폐기(그라운딩 강제)
+                        dropped += 1; continue
+                    for node, typ in [(h, rel[r][0]), (tl, rel[r][1])]:
+                        if node not in G:
+                            G.add_node(node, type=typ)
+                        elif G.nodes[node]["type"] != typ:
+                            conflicts += 1                 # 타입 충돌(finding #10): 첫 타입 유지
+                    G.add_edge(h, tl, relation=r, source_paragraph_id=p["paragraph_id"], evidence=ev)
+                    edges += 1
+            if i % 50 == 0:
+                rate = i / (time.time() - t0)
+                eta = (len(todo) - i) / rate if rate else 0
+                print(f"  {i}/{len(todo)} · 노드 {G.number_of_nodes()} 엣지 {edges} · "
+                      f"{rate:.1f}/s · ETA {eta/60:.0f}분", flush=True)
+            if i % checkpoint_every == 0:
+                pickle.dump(G, open(gpath, "wb"))          # 체크포인트(hang/kill 대비)
+
+    pickle.dump(G, open(gpath, "wb"))
     print(f"\n그래프 저장 → data/graph.pkl | 노드 {G.number_of_nodes()} 엣지 {G.number_of_edges()} "
-          f"(타입충돌 {conflicts}, 근거없어 폐기 {dropped})")
+          f"(타입충돌 {conflicts}, 근거없어 폐기 {dropped}, 콜실패 {errors}) · {time.time()-t0:.0f}s")
     from collections import Counter
     rc = Counter(d["relation"] for _, _, d in G.edges(data=True))
     print("관계 분포:", dict(rc.most_common()))
@@ -150,7 +182,9 @@ def verify(n):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=500, help="main 코퍼스 샘플 문단 수")
+    ap.add_argument("--limit", type=int, default=500, help="main 코퍼스 샘플 문단 수 (--all 이면 무시)")
+    ap.add_argument("--all", action="store_true", help="main 코퍼스 전체 처리")
+    ap.add_argument("--workers", type=int, default=8, help="동시 LLM 호출 수")
     ap.add_argument("--verify", type=int, default=0, help="기존 그래프 엣지 정확도 샘플 수")
     a = ap.parse_args()
-    verify(a.verify) if a.verify else build(a.limit)
+    verify(a.verify) if a.verify else build(a.limit, all_paras=a.all, workers=a.workers)
