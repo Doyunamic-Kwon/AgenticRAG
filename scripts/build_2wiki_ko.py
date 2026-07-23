@@ -90,12 +90,21 @@ def ko_intro(ko_t):
     return txt[:1500] if txt else None
 
 
-def fetch_rows(pages):
-    rows = []
+def fetch_rows(pages, split="validation"):
+    """문제: 이전 실행에서 한 페이지 실패 시 전체 스캔을 중단해 12,576행 중 3,600행에서 멈췄었다
+    (validation split 전체 크기를 몰랐던 게 원인 — HF datasets-server /size로 사전 확인 가능했음).
+    수정: 실패한 페이지는 건너뛰고 계속 진행(연속 실패 5회 초과 시에만 중단, API 전체 장애 대비)."""
+    api = f"https://datasets-server.huggingface.co/rows?dataset={DS}&config=default&split={split}"
+    rows, consecutive_fail = [], 0
     for off in range(0, pages * 100, 100):
-        d = _fetch(f"{ROWS_API}&offset={off}&length=100", throttle=0.5)
+        d = _fetch(f"{api}&offset={off}&length=100", throttle=0.5)
         if not d:
-            print(f"  rows fetch 중단(off={off})"); break
+            consecutive_fail += 1
+            print(f"  rows fetch 실패(off={off}, 연속 {consecutive_fail}) — 건너뛰고 계속")
+            if consecutive_fail >= 5:
+                print(f"  연속 5회 실패 → 중단(off={off})"); break
+            continue
+        consecutive_fail = 0
         got = d.get("rows", [])
         rows += [r["row"] for r in got]
         if len(got) < 100:
