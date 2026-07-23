@@ -41,8 +41,9 @@ def load_eval(which, limit):
     if which == "multi":
         # 2Wiki 적응 gold (깨끗한 셋). KorQuAD 브릿지 초판(multihop.jsonl)은 품질 미달로 미사용.
         rows = [json.loads(l) for l in open(ROOT / "data/eval/multihop_2wiki.jsonl", encoding="utf-8")]
-        return [{"qid": r["qid"], "question": r["question"],
-                 "gold": {r["hops"][-1]["evidence_paragraph"]}} for r in rows]
+        out = [{"qid": r["qid"], "question": r["question"],
+                "gold": {r["hops"][-1]["evidence_paragraph"]}} for r in rows]
+        return out[:limit]
     if which == "single":
         text2pid = {json.loads(l)["text"]: json.loads(l)["paragraph_id"]
                     for l in open(ROOT / "data/corpus.jsonl", encoding="utf-8")}
@@ -71,6 +72,44 @@ def run_baseline(evalset, embedder, index, ids):
     return rows
 
 
+def load_eval_answers(which):
+    """qid → {answer, aliases} (파이프라인 모드의 EM 채점용, multi 셋만)."""
+    if which != "multi":
+        return {}
+    out = {}
+    for l in open(ROOT / "data/eval/multihop_2wiki.jsonl", encoding="utf-8"):
+        r = json.loads(l)
+        out[r["qid"]] = {r["answer"]} | set(r.get("answer_aliases", []))
+    return out
+
+
+def _norm(s):
+    return "".join((s or "").split()).lower()
+
+
+async def run_pipeline_mode(evalset, gold_answers, mode):
+    """ours/ours_g/agent_basic: 실제 파이프라인 실행 → EM 기반 정답률(05 C3 Recall@k 전체는 후속,
+    resolve_hop이 검색시점 문단 노출해야 함 — 오늘은 파이프라인 회복 자체를 EM으로 증명)."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from verihop.bootstrap import build_pipeline
+    pipeline = build_pipeline(mode)
+    rows = []
+    for e in evalset:
+        try:
+            r = await pipeline(e["question"])
+            ans = r["answer"]
+            gold = gold_answers.get(e["qid"], set())
+            em = any(_norm(ans["text"]) == _norm(g) or _norm(g) in _norm(ans["text"]) for g in gold) if gold else None
+            rows.append({"qid": e["qid"], "question": e["question"], "answer": ans["text"],
+                        "status": ans["status"], "confidence": ans["confidence"], "em": em,
+                        "gold": list(gold)})
+        except Exception as ex:
+            rows.append({"qid": e["qid"], "question": e["question"], "answer": None,
+                        "status": "ERROR", "confidence": 0.0, "em": False, "error": str(ex)})
+        print(f"  {e['qid']}: {rows[-1]['status']} em={rows[-1]['em']} → {rows[-1]['answer']}", flush=True)
+    return rows
+
+
 def main(mode, which, limit):
     c = yaml.safe_load(open(ROOT / "configs/settings.yaml", encoding="utf-8"))
     evalset = load_eval(which, limit)
@@ -80,10 +119,22 @@ def main(mode, which, limit):
         embedder = make_embedder(c)
         index, ids = load_index(c)
         rows = run_baseline(evalset, embedder, index, ids)
+        agg = metrics.aggregate([{"ranked": r["ranked"], "gold": set(r["gold"])} for r in rows])
     else:
-        raise SystemExit(f"--mode {mode} 는 파이프라인 완성 후(W4). 지금은 baseline만.")
+        import asyncio
+        gold_answers = load_eval_answers(which)
+        rows = asyncio.run(run_pipeline_mode(evalset, gold_answers, mode))
+        n = len(rows) or 1
+        em_scored = [r for r in rows if r["em"] is not None]
+        agg = {
+            "em_accuracy": sum(1 for r in em_scored if r["em"]) / (len(em_scored) or 1),
+            "em_scored_n": len(em_scored),
+            "avg_confidence": sum(r["confidence"] for r in rows) / n,
+            "status_counts": {s: sum(1 for r in rows if r["status"] == s)
+                              for s in {r["status"] for r in rows}},
+            "note": "05 C3 전체 Recall@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명",
+        }
 
-    agg = metrics.aggregate([{"ranked": r["ranked"], "gold": set(r["gold"])} for r in rows])
     run_id = f"{mode}_{which}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     out = ROOT / "results" / run_id
     out.mkdir(parents=True, exist_ok=True)
@@ -93,8 +144,12 @@ def main(mode, which, limit):
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     print(f"→ results/{run_id}/metrics.json")
-    print(f"  Recall@5={agg['recall@5']:.1%}  @10={agg['recall@10']:.1%}  "
-          f"MRR={agg['mrr']:.3f}  nDCG@10={agg['ndcg@10']:.3f}")
+    if mode == "baseline":
+        print(f"  Recall@5={agg['recall@5']:.1%}  @10={agg['recall@10']:.1%}  "
+              f"MRR={agg['mrr']:.3f}  nDCG@10={agg['ndcg@10']:.3f}")
+    else:
+        print(f"  EM정답률={agg['em_accuracy']:.1%} (n={agg['em_scored_n']})  "
+              f"평균confidence={agg['avg_confidence']:.2f}  status={agg['status_counts']}")
 
 
 if __name__ == "__main__":

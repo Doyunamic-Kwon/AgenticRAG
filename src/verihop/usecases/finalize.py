@@ -24,12 +24,13 @@ def _canon(name, alias):
 
 
 def _path_check(hops, hop_results, graph, alias):
-    """제약 BFS: hop 체인의 각 edge가 그래프에 실존하는지(RoG Algorithm 1 방식). 정보부족→None(중립)."""
-    by_id = {h["id"]: h for h in hops}
+    """제약 BFS: hop 체인의 각 edge가 그래프에 실존하는지(RoG Algorithm 1 방식). 정보부족→None(중립).
+    start는 hop["start_node"](일괄 그라운딩 결과)에 기대지 않고 리터럴을 매번 다시 alias로
+    정규화한다 — 그라운딩이 hop 단위 실행시점으로 옮겨져(bootstrap._rh) 원본 hops엔 안 남는다."""
     ordered = sorted(hops, key=lambda h: h["id"])
     cur_node = None
     for h in ordered:
-        start = h.get("start_node") if not _refs(h) else cur_node
+        start = cur_node if _refs(h) else _canon(h["start"], alias)
         r = hop_results.get(h["id"])
         if r is None or r["status"] == "FAILED" or not r["answer"]:
             return None

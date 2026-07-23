@@ -54,6 +54,7 @@ def _search(hop, sub_query, state):
     query = f"{sub_query} {definition}" if state.get("use_hyde", True) else sub_query  # HyDE 결합
 
     path_a = vector.search(query, top_k)              # [(pid, text, score)]
+    pid2text = {pid: text for pid, text, _ in path_a}  # desc_check가 ID가 아닌 실제 문단으로 비교하게
     paras_block = "\n".join(f"[{pid}] {text[:400]}" for pid, text, _ in path_a)
     a_candidates = []
     if path_a:
@@ -75,6 +76,11 @@ def _search(hop, sub_query, state):
         for node, pids in graph.neighbors(hop["start_node"], hop["relation_grounded"], hop["direction"]):
             path_b.append({"entity": node, "evidence_paragraph_ids": pids,
                             "origin": "graph", "vector_score": 0.0})
+    full_text = state.get("pid2text", {})               # 그래프 근거 문단도 실제 텍스트로 (경로A 밖일 수 있음)
+    for c in path_b:
+        for pid in c["evidence_paragraph_ids"]:
+            if pid not in pid2text and pid in full_text:
+                pid2text[pid] = full_text[pid]
 
     merged: dict[str, dict] = {}
     for c in a_candidates + path_b:
@@ -91,7 +97,7 @@ def _search(hop, sub_query, state):
                 if p not in m["evidence_paragraph_ids"]:
                     m["evidence_paragraph_ids"].append(p)
             m["vector_score"] = max(m["vector_score"], c["vector_score"])
-    return list(merged.values())
+    return list(merged.values()), pid2text
 
 
 def _backlink_state(hop, candidate_node, graph):
@@ -112,20 +118,24 @@ def _backlink_state(hop, candidate_node, graph):
     return "absent"                                     # 그래프에 정보 없음 → 중립
 
 
-def _verify(hop, candidates, state, verifier):
+def _verify(hop, candidates, pid2text, state, verifier):
     graph, alias = state["graph"], state["alias"]
     theta_desc = state.get("theta_desc", 0.60)
     pass_ratio = state.get("pass_ratio", 0.75)
     embedder = state["embedder"]
+    expected_type = hop["expected"]["type"]              # falsy(""/None) = 타입 제약 없음(SIMPLE 폴백)
     defn_vec = embedder.embed([hop["expected"]["definition"]])[0]
 
     out = []
     for c in candidates:
         node = _canon(c["entity"], alias)
         node_type = graph.node_type(node)
-        type_ok = (node_type == hop["expected"]["type"]) if node_type is not None else None
+        if not expected_type:
+            type_ok = None                                # 제약 없음 → 시행 안 함(중립)
+        else:
+            type_ok = (node_type == expected_type) if node_type is not None else None
         name_ok = (c["entity"] in alias) or (node in alias.values()) or graph.exists(node)
-        ev_text = " ".join(c["evidence_paragraph_ids"]) or c["entity"]
+        ev_text = " ".join(pid2text.get(p, "") for p in c["evidence_paragraph_ids"]).strip() or c["entity"]
         try:
             ev_vec = embedder.embed([ev_text])[0]
             desc_ok = _cos(ev_vec, defn_vec) > theta_desc
@@ -153,8 +163,8 @@ async def resolve_hop(hop, state, verifier=None):
     queries_used, all_candidates, retries = [sub_query], [], 0
 
     while True:
-        raw = _search(hop, sub_query, state)
-        scored = _verify(hop, raw, state, verifier) if raw else []
+        raw, pid2text = _search(hop, sub_query, state)
+        scored = _verify(hop, raw, pid2text, state, verifier) if raw else []
         all_candidates.extend(scored)                   # 전량 보존 (ADR-8)
         scored.sort(key=lambda c: c["score"], reverse=True)
 
