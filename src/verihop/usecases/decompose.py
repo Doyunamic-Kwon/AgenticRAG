@@ -101,6 +101,11 @@ def _build_prompt(question: str, unresolved: list, schema_relations: dict, types
 7. final_op은 여러 hop의 답을 비교해야 답이 나오는 질문(더 이르다/늦다/같다/크다/작다)에서만 채우고,
    아니면 null로 둔다. operator는 EARLIER|LATER|SAME|GREATER|SMALLER 중 하나, in은 비교 대상 hop id 배열이다.
 8. corrected_question은 최종 확정 질문 문자열이다.
+9. **질문에 이미 고유명사로 등장하는 엔티티는 그 자체를 hop.start로 바로 쓴다. 그 엔티티가 "누구에 의해
+   만들어졌는지/누가 그를 만들었는지" 같은 불필요한 선행 hop을 지어내지 마라.** 질문이 이미 인물을
+   이름으로 지목했다면(예: "OO의 곡을 부른 가수 OO는" 처럼 그 가수 이름이 문장에 그대로 있다면), 그
+   인물을 만든 사람을 찾는 hop은 의미가 없다 — 그 인물 자신에서 바로 다음 관계로 넘어가라. 질문 속에
+   이름이 명시된 엔티티를 다시 "찾아야 할 대상"으로 취급하지 마라.
 
 [예시 1 — fwd, 참조 체인]
 질문: "베토벤이 태어난 도시가 속한 나라는?"
@@ -120,6 +125,18 @@ def _build_prompt(question: str, unresolved: list, schema_relations: dict, types
     "expected": {{"type": "PERSON", "definition": "잘츠부르크에서 태어난 음악가"}},
     "anchor_meta": {{"name": "잘츠부르크", "disambiguator": null}},
     "sub_query": "잘츠부르크에서 태어난 음악가는 누구인가?"}}
+]}}
+
+[예시 3 — 규칙 9: 인물이 이미 이름으로 등장 → 그 인물에서 바로 시작 (틀린 예 아님, 올바른 처리)]
+질문: "존 레논의 곡 '하느님'을 부른 가수는 어디에서 태어났나요?"
+설명: "존 레논"이 이미 이름으로 나와 있고, "그 곡을 부른 가수"는 존 레논 자신을 가리킨다(재서술일 뿐,
+새로운 미지의 대상이 아니다). "누가 존 레논을 만들었는가" 같은 hop을 만들면 안 된다 — 바로 bornIn으로.
+출력: {{"corrected_question": "존 레논의 곡 '하느님'을 부른 가수는 어디에서 태어났나요?", "final_op": null,
+ "hops": [
+  {{"id": 1, "start": "존 레논", "relation": "bornIn", "direction": "fwd",
+    "expected": {{"type": "LOCATION", "definition": "존 레논이 태어난 곳"}},
+    "anchor_meta": {{"name": "존 레논", "disambiguator": null}},
+    "sub_query": "존 레논은 어디에서 태어났나?"}}
 ]}}
 
 [질문] "{question}"
