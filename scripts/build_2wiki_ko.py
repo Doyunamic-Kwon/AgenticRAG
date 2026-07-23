@@ -33,10 +33,14 @@ REL_MAP = {
 PROMPT = """영어 2-hop 질문을 자연스러운 한국어로 번역하라. 고유명사는 아래 한국어 표기를 그대로 써라.
 
 영어 질문: {q}
-한국어 표기: {names}
+질문에 등장하는 고유명사 한국어 표기: {names}
+정답(영어, 질문 문장에는 절대 노출 금지 — answer_ko 필드에만 사용): {answer_en}
 
-다리 엔티티나 최종 답을 질문에 노출하지 말고(원문도 노출 안 함), 의미를 보존하라.
-JSON만: {{"question": "한국어 질문", "answer_ko": "최종 답의 자연스러운 한국어 표기"}}"""
+다리 엔티티나 최종 답을 질문 문장에 노출하지 말고(원문도 노출 안 함), 의미를 보존해 질문만 번역하라.
+answer_ko는 반드시 위 정답({answer_en})을 자연스러운 한국어로 표기한 것이어야 한다. 정답을 한국어로
+어떻게 표기할지 확신이 없으면 지어내지 말고 영어 원문 그대로 써라. 절대로 다리 엔티티나 앵커 엔티티의
+이름을 answer_ko로 쓰지 마라(둘은 정답이 아니다).
+JSON만: {{"question": "한국어 질문", "answer_ko": "정답의 자연스러운 한국어 표기"}}"""
 
 _cache = {}
 
@@ -184,12 +188,15 @@ def main(n, pages):
         names = ", ".join(f"{en}={ko}" for en, ko in
                           [(anchor_en, anchor_ko), (bridge_en, bridge_ko)] if ko)
         try:
-            out = llm.complete(PROMPT.format(q=r["question"], names=names), schema=True)
+            out = llm.complete(PROMPT.format(q=r["question"], names=names, answer_en=answer_en), schema=True)
         except Exception as e:
             print(f"  LLM skip: {e}"); continue
         if not isinstance(out, dict) or not out.get("question"):
             continue
         ans_ko = answer_ko or out.get("answer_ko") or answer_en
+        if ans_ko in (bridge_ko, anchor_ko):          # LLM이 정답 대신 다리/앵커 이름을 되뇐 오염 방어
+            print(f"  gold 오염 방어: answer_ko가 다리/앵커와 동일 → 영어 원문으로 대체 ({ans_ko})")
+            ans_ko = answer_en
 
         pid_a, pid_b = f"2wiki::{anchor_ko}", f"2wiki::{bridge_ko}"
         for pid, title, txt in [(pid_a, anchor_ko, a_intro), (pid_b, bridge_ko, b_intro)]:
