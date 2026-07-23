@@ -92,7 +92,16 @@ def validate_plan(hops, final_op, goal_type_surface, *,
         defn = h["expected"]["definition"]
         anchor = h["anchor_meta"]["name"] if h.get("anchor_meta") else None
         for name in alias_names:
-            if name and name != anchor and name in defn:
+            # 문제: 부분문자열 매칭이라 alias가 1~2음절짜리 짧은 이름이면("신","원","나") 흔한
+            # 음절이 우연히 definition에 들어있다는 이유만으로 오탐(127문항 확대평가에서 검사8이
+            # 92.9%→수정 후에도 상당수 계획을 계속 걸러내던 잔여 원인). 실제 답 고유명사는 대부분
+            # 2음절 이상이라 1글자 alias는 애초에 제외. 앵커 비교도 완전일치 대신 포함관계로 완화
+            # (LLM이 anchor_meta.name에 따옴표·접두어를 섞어 내보내는 포맷 흔들림 방어).
+            if len(name) < 2:
+                continue
+            if anchor and (name in anchor or anchor in name):
+                continue
+            if name in defn:
                 # 앵커가 아닌 alias 엔티티명이 정의에 있으면 누출 의심
                 F.append((8, h["id"], "재생성"))
                 break
