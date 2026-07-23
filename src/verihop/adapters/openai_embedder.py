@@ -27,7 +27,8 @@ class OpenAIEmbedder:
 
     def embed(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
         model = self._model_for(is_query)
-        texts = [t[:self.max_chars] for t in texts]   # 입력 한도 초과 방지 (ADR-11)
+        # 빈/공백 문자열은 Upstage가 400으로 거부한다(실측) — 자리표시자로 치환해 인덱스 보존.
+        texts = [(t[:self.max_chars] if t and t.strip() else "(빈 텍스트)") for t in texts]
         out: list[list[float]] = []
         for i in range(0, len(texts), self.batch):
             resp = self.client.embeddings.create(model=model, input=texts[i:i + self.batch])
