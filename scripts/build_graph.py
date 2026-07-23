@@ -88,13 +88,19 @@ def load_paras(limit, all_paras):
     return paras
 
 
-def _extract_one(llm, p):
-    """워커 스레드에서 실행. 성공 시 (p, triples), 실패 시 (p, None)."""
-    try:
-        out = llm.complete(EXTRACT_PROMPT.format(schema=SCHEMA_DESC, text=p["text"][:2000]), schema=True)
-        return p, (out.get("triples") or []) if isinstance(out, dict) else []
-    except Exception as e:
-        return p, None
+def _extract_one(llm, p, tries=3):
+    """워커 스레드에서 실행. 성공 시 (p, triples, None), 실패 시 (p, None, 에러메시지).
+    SDK 자체 재시도(max_retries)와 별개로 지속부하(sustained rate limit) 대비 수동 백오프."""
+    last_err = None
+    for i in range(tries):
+        try:
+            out = llm.complete(EXTRACT_PROMPT.format(schema=SCHEMA_DESC, text=p["text"][:2000]), schema=True)
+            return p, ((out.get("triples") or []) if isinstance(out, dict) else []), None
+        except Exception as e:
+            last_err = str(e)[:200]
+            if i < tries - 1:
+                time.sleep(2 ** (i + 1))               # 2s, 4s
+    return p, None, last_err
 
 
 def build(limit, all_paras=False, workers=8, checkpoint_every=200):
@@ -117,15 +123,18 @@ def build(limit, all_paras=False, workers=8, checkpoint_every=200):
         print("추가로 처리할 문단 없음."); pickle.dump(G, open(gpath, "wb")); return
 
     edges = conflicts = dropped = errors = 0
+    err_samples = []
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(_extract_one, llm, p): p for p in todo}
         for i, fut in enumerate(as_completed(futures), 1):
-            p, triples = fut.result()
-            processed.add(p["paragraph_id"])
+            p, triples, err = fut.result()
             if triples is None:
-                errors += 1
+                errors += 1                                # processed에 안 넣음 → 다음 실행에서 재시도
+                if len(err_samples) < 5:
+                    err_samples.append(err)
             else:
+                processed.add(p["paragraph_id"])            # 성공한 문단만 "처리됨"으로 기록
                 norm = " ".join(p["text"].split())
                 for t in triples:
                     r, h, tl = t.get("relation"), (t.get("head") or "").strip(), (t.get("tail") or "").strip()
@@ -151,7 +160,12 @@ def build(limit, all_paras=False, workers=8, checkpoint_every=200):
 
     pickle.dump(G, open(gpath, "wb"))
     print(f"\n그래프 저장 → data/graph.pkl | 노드 {G.number_of_nodes()} 엣지 {G.number_of_edges()} "
-          f"(타입충돌 {conflicts}, 근거없어 폐기 {dropped}, 콜실패 {errors}) · {time.time()-t0:.0f}s")
+          f"(타입충돌 {conflicts}, 근거없어 폐기 {dropped}, 콜실패 {errors} — 미처리로 남아 다음 실행에 재시도) "
+          f"· {time.time()-t0:.0f}s")
+    if err_samples:
+        print("실패 샘플:")
+        for e in err_samples:
+            print("  -", e)
     from collections import Counter
     rc = Counter(d["relation"] for _, _, d in G.edges(data=True))
     print("관계 분포:", dict(rc.most_common()))
