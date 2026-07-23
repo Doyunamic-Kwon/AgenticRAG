@@ -17,6 +17,7 @@ import faiss
 import yaml
 from dotenv import load_dotenv
 import metrics
+from verihop.usecases.correct import _strip_particle   # EM 채점에 조사 정규화 재사용 (05 "형태소 정규화")
 
 KEY_ENV = {"upstage": "UPSTAGE_API_KEY", "openai": "OPENAI_API_KEY", "naver": "NAVER_CLOVA_API_KEY"}
 
@@ -84,7 +85,9 @@ def load_eval_answers(which):
 
 
 def _norm(s):
-    return "".join((s or "").split()).lower()
+    s = "".join((s or "").split())
+    s = _strip_particle(s)          # 답 끝에 붙은 조사(은/는/이/가/을/를/...) 제거 후 비교 (05 형태소 정규화)
+    return s.lower()
 
 
 async def run_pipeline_mode(evalset, gold_answers, mode):
