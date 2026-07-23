@@ -67,6 +67,20 @@ def build_adapters(settings, llm_provider=None):
             "tracer": tracer, "alias": alias}
 
 
+def _leak_check_alias_names(adapters):
+    """decompose의 8번 검사(정답 누출 방지)에 넘길 alias 집합. 문제: occupation 관계의 tail 값
+    (예: "감독"·"가수"·"작곡가"·"배우")은 여러 인물이 공유하는 정당한 속성값인데, alias.json엔
+    다른 고유명사와 똑같이 들어있어 8번 검사가 "그 감독이 태어난 곳" 같은 정상적인 definition조차
+    '누출'로 오판 — 127문항 중 92.9%가 SIMPLE로 강등되는 원인이었다. occupation의 tail 값만 alias
+    집합에서 제외(그래프·grounding용 alias 자체는 그대로 둠 — 이 함수는 leak-check 전용 뷰)."""
+    if "_leak_alias_names" not in adapters:
+        graph = adapters["graph"]
+        occ_values = {n for n in graph.all_nodes()
+                     if "occupation" in graph.relations_of(n) and not graph.neighbors(n, "occupation", "fwd")}
+        adapters["_leak_alias_names"] = set(adapters["alias"]) - occ_values
+    return adapters["_leak_alias_names"]
+
+
 def llm_judge_verifier(type_ok, name_ok, desc_ok, backlink, pass_ratio, weak_mode):
     """Ours-G/Agent-basic arm용 확률적 검증기 — 그래프 신호 무시, desc(LLM 임베딩 유사도)만으로 판정
     (ADR-4 verifier 주입). 실제 LLM judge 콜은 비용 상 desc_check 재사용으로 근사(MVP 스코프)."""
@@ -98,7 +112,7 @@ async def run_pipeline(raw_question, adapters, settings, schema, relation_desc, 
                 "hop_results": {1: r}, "hops": [pseudo_hop]}
 
     dec = decompose(corr["corrected_question"], corr["unresolved"], adapters["llm"],
-                    schema_relations=schema, types=types, alias_names=set(alias))
+                    schema_relations=schema, types=types, alias_names=_leak_check_alias_names(adapters))
 
     if dec["mode"] == "SIMPLE" or not dec["hops"]:
         state = _state(adapters, settings, relation_desc)
