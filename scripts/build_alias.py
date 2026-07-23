@@ -17,6 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # "그 도시" 같은 정상적인 지시표현마다 오탐을 일으킨다 — 실제로 시나리오 B를 막았던 버그.
 PRONOUNS = {"그", "그녀", "그것", "이것", "저것", "여기", "거기", "저기", "이곳", "그곳", "저곳"}
 
+# 같은 도시의 한국어 표기 변이(외래어 표기 통일 안 됨) — 위키 redirect 없이 수동 보강.
+# 예: 모차르트 문서는 "비엔나"를 압도적으로 많이 쓰는데 그래프 노드는 "빈"이라 링킹 안 되면
+# backlink 검증(그래프가 실제 답을 아는지)이 무력화된다.
+MANUAL_ALIASES = {"비엔나": "빈", "베를린 (도시)": "베를린"}
+
 
 def main():
     alias: dict[str, str] = {}
@@ -68,6 +73,8 @@ def main():
                 alias[ev] = hit
                 linked += 1
         print(f"  그래프 노드 {G.number_of_nodes()} 병합 · eval 링킹 {linked}건")
+
+    alias.update(MANUAL_ALIASES)                       # 표기변이 수동 보강 (자기자신 매핑 덮어씀)
 
     out = ROOT / "data/alias.json"
     json.dump(alias, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=0)

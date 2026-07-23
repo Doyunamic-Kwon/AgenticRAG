@@ -5,3 +5,4 @@ pyyaml            # configs 로드
 python-dotenv     # .env
 faiss-cpu         # 벡터 인덱스 (flat, exact)
 networkx          # 지식그래프 (W1.3)
+streamlit         # 데모 UI (apps/streamlit_app.py)
