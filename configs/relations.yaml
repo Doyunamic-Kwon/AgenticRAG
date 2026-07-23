@@ -11,8 +11,9 @@ relations:
   - {name: createdBy,  head: WORK,     tail: PERSON,   ko: ["만든", "작곡한", "쓴", "감독한"]}
   - {name: teacherOf,  head: PERSON,   tail: PERSON,   ko: ["스승", "제자", "가르친"]}
   - {name: occupation, head: PERSON,   tail: TERM,     ko: ["직업", "활동한 분야"]}
+  - {name: hostsEvent, head: LOCATION, tail: EVENT,    ko: ["축제", "페스티벌", "개최", "열리는", "행사"]}
 fallback: relatedTo        # 스키마 밖 → 검증 약화 모드(backlink 생략)
-types: [PERSON, LOCATION, ORG, DATE, NUMBER, WORK, TERM]
+types: [PERSON, LOCATION, ORG, DATE, NUMBER, WORK, TERM, EVENT]
 operators:
   EARLIER: {in_type: DATE}
   LATER:   {in_type: DATE}

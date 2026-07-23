@@ -31,6 +31,7 @@ flowchart LR
 - [x] W2 코어 파이프라인 E2E (분해·그라운딩·검증·재질의·응답조립) — 26문항 실행, 메커니즘 검증됨
 - [x] W4.1 4-arm 비교 재실행(98% 정밀도) — EM 동률 11.5%(불변), **고신뢰오답은 Ours만 0건**(Agent-basic 3·Ours−G 4)
 - [x] 일반 RAG 대조군(`plain_rag.py`) — 시연 대시보드용, 임베딩검색+LLM답변만
+- [x] **W3.4 게이트: 시나리오 B 최초 완전 재현** — 모차르트→bornIn→잘츠부르크→hostsEvent→잘츠부르크 페스티벌, ANSWERED·confidence 0.85·path_check True
 - [ ] W4.3 **게이트: Ours > Agent-basic(EM)** — 아직 미확정(N=26 노이즈 범위). 고신뢰오답 KPI(05 §4)는 충족
 
 ## W0.1 수율 체크 결과

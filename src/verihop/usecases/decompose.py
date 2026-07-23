@@ -25,6 +25,7 @@ _GOAL_TYPE_HINTS = [
     ("몇 개", "NUMBER"), ("얼마", "NUMBER"), ("숫자", "NUMBER"),
     ("학교", "ORG"), ("단체", "ORG"), ("회사", "ORG"), ("소속", "ORG"),
     ("작품", "WORK"), ("영화", "WORK"), ("노래", "WORK"),
+    ("축제", "EVENT"), ("페스티벌", "EVENT"), ("행사", "EVENT"),
 ]
 
 _OPS = {"EARLIER", "LATER", "SAME", "GREATER", "SMALLER"}
@@ -42,6 +43,10 @@ _CHECK_DESC = {
 
 def _infer_goal_type(question: str) -> str | None:
     tail = question[-12:]
+    # "A의 B는?" 구조에서 실제 목표는 B(마지막 '의' 뒤)다 — A쪽 키워드에 낚이지 않게 그 뒤만 본다.
+    # (실패 사례: "모차르트가 태어난 도시의 대표 축제는?" → "도시"에 걸려 LOCATION 오추론, 진짜는 EVENT)
+    if "의" in tail:
+        tail = tail.rsplit("의", 1)[-1]
     for kw, t in _GOAL_TYPE_HINTS:
         if kw in tail:
             return t

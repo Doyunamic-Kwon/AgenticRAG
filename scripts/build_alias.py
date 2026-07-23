@@ -12,11 +12,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# 대명사·지시어 — 그래프 추출이 "그는 ~에서 태어났다" 같은 문장에서 실제 인물명 대신 이걸 엔티티로
+# 잘못 뽑는 사례가 실측 확인됨(예: "그"→김국진). alias에 있으면 decompose 계획검증 8번(정답 누출)이
+# "그 도시" 같은 정상적인 지시표현마다 오탐을 일으킨다 — 실제로 시나리오 B를 막았던 버그.
+PRONOUNS = {"그", "그녀", "그것", "이것", "저것", "여기", "거기", "저기", "이곳", "그곳", "저곳"}
+
 
 def main():
     alias: dict[str, str] = {}
 
-    for fp in ["data/corpus.jsonl", "data/corpus_2wiki.jsonl"]:
+    for fp in ["data/corpus.jsonl", "data/corpus_2wiki.jsonl", "data/corpus_demo.jsonl"]:
         p = ROOT / fp
         if p.exists():
             for l in open(p, encoding="utf-8"):
@@ -39,7 +44,8 @@ def main():
         import pickle
         G = pickle.load(open(gp, "rb"))
         for n in G.nodes:
-            alias.setdefault(n, n)
+            if n not in PRONOUNS:
+                alias.setdefault(n, n)
         # 링킹 휴리스틱: eval 엔티티명이 그래프 노드에 부분포함되면 연결
         # ("존 레논"→"존 윈스턴 오노 레논", "제퍼슨"↔"토머스 제퍼슨"). backlink 검증 위해.
         eval_names = set()

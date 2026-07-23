@@ -56,9 +56,10 @@ def make_embedder():
 
 def load_corpus():
     files = [ROOT / "data/corpus.jsonl"]
-    extra = ROOT / "data/corpus_2wiki.jsonl"          # 2Wiki gold 문단 증분(있으면 병합)
-    if extra.exists():
-        files.append(extra)
+    for extra_name in ["data/corpus_2wiki.jsonl", "data/corpus_demo.jsonl"]:   # 증분(있으면 병합)
+        extra = ROOT / extra_name
+        if extra.exists():
+            files.append(extra)
     corpus = []
     for fp in files:
         corpus += [json.loads(l) for l in open(fp, encoding="utf-8")]

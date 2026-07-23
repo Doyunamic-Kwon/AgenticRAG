@@ -58,7 +58,8 @@ def build_adapters(settings, llm_provider=None):
                     settings["llm"].get("temperature", 0.0), settings["llm"].get("max_retries", 2))
 
     vdir = ROOT / settings["vector"]["dir"]
-    vector = FaissIndex(vdir, embedder, [ROOT / "data/corpus.jsonl", ROOT / "data/corpus_2wiki.jsonl"])
+    vector = FaissIndex(vdir, embedder, [ROOT / "data/corpus.jsonl", ROOT / "data/corpus_2wiki.jsonl",
+                                         ROOT / "data/corpus_demo.jsonl"])
     graph = NetworkxGraph(str(ROOT / "data/graph.pkl"))
     tracer = JsonTracer()
     alias = json.load(open(ROOT / "data/alias.json", encoding="utf-8"))

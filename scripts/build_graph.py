@@ -35,7 +35,9 @@ SCHEMA_DESC = """- bornIn: (사람)→(지명). 예: (베토벤)→(본)
 - memberOf: (사람)→(단체). 예: (메시)→(FC 바르셀로나)
 - createdBy: (작품/저작물)→(만든 사람). 작품이 head다! 예: (교향곡 9번)→(베토벤), (미국 독립 선언서)→(제퍼슨)
 - teacherOf: (사람)→(사람). 예: (하이든)→(베토벤)
-- occupation: (사람)→(직업/분야). 예: (베토벤)→(작곡가)"""
+- occupation: (사람)→(직업/분야). 예: (베토벤)→(작곡가)
+- hostsEvent: (도시/장소)→(축제·행사). 그 도시에서 정기적으로 열리는 구체적 행사명일 때만. 예:
+  (잘츠부르크)→(잘츠부르크 페스티벌)"""
 
 EXTRACT_PROMPT = """아래 문단에서 다음 관계의 사실만 (head, relation, tail) 트리플로 추출하라.
 
@@ -69,7 +71,12 @@ JSON만: {{"valid": true/false, "reason": "grounding|entity_shape|relation_fit|o
 
 REL_KO = {"bornIn": "태어난 곳", "diedIn": "죽은 곳", "locatedIn": "상위 지역",
           "capitalOf": "수도", "nationality": "국적", "studiedAt": "출신 학교",
-          "memberOf": "소속", "createdBy": "만든 사람", "teacherOf": "스승", "occupation": "직업"}
+          "memberOf": "소속", "createdBy": "만든 사람", "teacherOf": "스승", "occupation": "직업",
+          "hostsEvent": "개최하는 축제/행사"}
+
+# "그는 ~에서 태어났다"류 문장에서 실제 인물명 대신 대명사를 엔티티로 잘못 뽑는 사례가 실측 확인됨
+# (evidence 그라운딩은 통과하지만 고유명사가 아니라 EXTRACT_PROMPT 규칙 위반 — 코드로 한 번 더 막는다).
+PRONOUNS = {"그", "그녀", "그것", "이것", "저것", "여기", "거기", "저기", "이곳", "그곳", "저곳"}
 
 
 def make_llm():
@@ -90,9 +97,10 @@ def load_paras(limit, all_paras):
     main = [json.loads(l) for l in open(ROOT / "data/corpus.jsonl", encoding="utf-8")]
     random.seed(0); random.shuffle(main)
     paras = main if all_paras else main[:limit]
-    extra = ROOT / "data/corpus_2wiki.jsonl"
-    if extra.exists():                                # 2wiki gold 문서는 전량(eval 관련)
-        paras += [json.loads(l) for l in open(extra, encoding="utf-8")]
+    for extra_name in ["data/corpus_2wiki.jsonl", "data/corpus_demo.jsonl"]:
+        extra = ROOT / extra_name
+        if extra.exists():                            # 2wiki gold·데모 엔티티 문서는 전량
+            paras += [json.loads(l) for l in open(extra, encoding="utf-8")]
     return paras
 
 
@@ -146,7 +154,7 @@ def build(limit, all_paras=False, workers=8, checkpoint_every=200):
                 norm = " ".join(p["text"].split())
                 for t in triples:
                     r, h, tl = t.get("relation"), (t.get("head") or "").strip(), (t.get("tail") or "").strip()
-                    if r not in schema or not h or not tl or h == tl:
+                    if r not in schema or not h or not tl or h == tl or h in PRONOUNS or tl in PRONOUNS:
                         continue
                     ev = " ".join((t.get("evidence") or "").split())
                     if len(ev) < 8 or ev not in norm:     # 근거 문장이 문단에 없으면 폐기(그라운딩 강제)
@@ -181,7 +189,7 @@ def build(limit, all_paras=False, workers=8, checkpoint_every=200):
 
 def _load_pid2text():
     return {json.loads(l)["paragraph_id"]: json.loads(l)["text"]
-            for fp in ["data/corpus.jsonl", "data/corpus_2wiki.jsonl"]
+            for fp in ["data/corpus.jsonl", "data/corpus_2wiki.jsonl", "data/corpus_demo.jsonl"]
             if (ROOT / fp).exists() for l in open(ROOT / fp, encoding="utf-8")}
 
 
