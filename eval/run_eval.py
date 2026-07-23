@@ -157,7 +157,7 @@ def main(mode, which, limit):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", default="baseline", choices=["baseline", "basic", "ours_g", "ours"])
+    ap.add_argument("--mode", default="baseline", choices=["baseline", "agent_basic", "ours_g", "ours"])
     ap.add_argument("--set", dest="which", default="multi", choices=["single", "multi", "typo"])
     ap.add_argument("--limit", type=int, default=500)
     a = ap.parse_args()
