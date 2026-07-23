@@ -75,7 +75,10 @@ def ko_title(en_title):
                                       "prop": "langlinks", "lllang": "ko", "redirects": 1})
     if not d:
         return None
-    pg = list(d["query"]["pages"].values())[0]
+    pages = d.get("query", {}).get("pages")  # interwiki 응답 등은 query는 있어도 pages가 없음
+    if not pages:
+        return None
+    pg = list(pages.values())[0]
     ll = pg.get("langlinks")
     return ll[0]["*"] if ll else None
 
@@ -85,7 +88,10 @@ def ko_intro(ko_t):
                                       "exintro": 1, "explaintext": 1, "redirects": 1})
     if not d:
         return None
-    pg = list(d["query"]["pages"].values())[0]
+    pages = d.get("query", {}).get("pages")
+    if not pages:
+        return None
+    pg = list(pages.values())[0]
     txt = (pg.get("extract") or "").strip()
     return txt[:1500] if txt else None
 
