@@ -45,6 +45,10 @@ class GraphPort(Protocol):
 
     def exists(self, node: str) -> bool: ...
 
+    def all_nodes(self) -> list[str]:
+        """앵커 그라운딩 임베딩 폴백(alias exact 실패 시 top-1 매칭)용 전체 노드 목록."""
+        ...
+
 
 class TracerPort(Protocol):
     def emit(self, event: TraceEvent) -> None:

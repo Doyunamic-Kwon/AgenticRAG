@@ -46,3 +46,6 @@ class NetworkxGraph:
 
     def exists(self, node):
         return node in self.g
+
+    def all_nodes(self):
+        return list(self.g.nodes)
