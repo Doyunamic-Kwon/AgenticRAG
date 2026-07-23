@@ -97,24 +97,35 @@ def ko_intro(ko_t):
 
 
 def fetch_rows(pages, split="validation"):
-    """문제: 이전 실행에서 한 페이지 실패 시 전체 스캔을 중단해 12,576행 중 3,600행에서 멈췄었다
-    (validation split 전체 크기를 몰랐던 게 원인 — HF datasets-server /size로 사전 확인 가능했음).
-    수정: 실패한 페이지는 건너뛰고 계속 진행(연속 실패 5회 초과 시에만 중단, API 전체 장애 대비)."""
+    """문제 이력: (1) 페이지 실패 시 전체 스캔을 중단하던 버그 → 실패해도 계속 진행하도록 수정.
+    (2) 그 다음, 연속 5페이지 실패(오프셋 3400~3800, 추정 HF datasets-server 일시 장애)에서
+    '연속 5회 중단' 문턱에 걸려 12,576행 중 3,400행만 스캔하고 조기 종료 — 개별 페이지는 이미
+    `_fetch` 안에서 재시도(최대 5회+백오프)하는데도 실패했다는 건 순간 재시도로는 못 넘는 지속 장애란
+    뜻이므로, 중단 대신 실패한 오프셋을 모아뒀다가 스캔 끝난 뒤 더 긴 대기시간으로 한 번 더 시도한다."""
     api = f"https://datasets-server.huggingface.co/rows?dataset={DS}&config=default&split={split}"
-    rows, consecutive_fail = [], 0
+    rows, failed = [], []
     for off in range(0, pages * 100, 100):
         d = _fetch(f"{api}&offset={off}&length=100", throttle=0.5)
         if not d:
-            consecutive_fail += 1
-            print(f"  rows fetch 실패(off={off}, 연속 {consecutive_fail}) — 건너뛰고 계속")
-            if consecutive_fail >= 5:
-                print(f"  연속 5회 실패 → 중단(off={off})"); break
+            failed.append(off)
+            print(f"  rows fetch 실패(off={off}) — 건너뛰고 계속(끝나면 재시도)")
             continue
-        consecutive_fail = 0
         got = d.get("rows", [])
         rows += [r["row"] for r in got]
         if len(got) < 100:
             break
+    if failed:
+        print(f"  1차 스캔 실패 {len(failed)}개 오프셋 재시도(대기 3초/건)...")
+        still_failed = []
+        for off in failed:
+            time.sleep(3)
+            d = _fetch(f"{api}&offset={off}&length=100", throttle=0.5)
+            if not d:
+                still_failed.append(off)
+                continue
+            rows += [r["row"] for r in d.get("rows", [])]
+        if still_failed:
+            print(f"  재시도 후에도 실패 → 최종 스킵: off={still_failed}")
     return rows
 
 
