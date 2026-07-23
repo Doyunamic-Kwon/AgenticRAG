@@ -54,10 +54,18 @@ EXTRACT_PROMPT = """아래 문단에서 다음 관계의 사실만 (head, relati
 
 JSON만: {{"triples": [{{"head": "...", "relation": "createdBy", "tail": "...", "evidence": "문단에서 그대로 복사한 문장"}}]}}"""
 
-VERIFY_PROMPT = """문단이 다음 트리플을 실제로 뒷받침하는가?
-트리플: ({h}) --{r}--> ({t})   (의미: {desc})
+VERIFY_PROMPT = """다음 트리플이 유효한지 세 가지 기준으로 판정하라.
+트리플: ({h}) --{r}--> ({t})   (관계 의미: {desc})
 문단: {text}
-JSON만: {{"supported": true/false}}"""
+
+1. 그라운딩: 문단이 이 사실을 실제로 뒷받침하는가(추측·비약 아님).
+2. 엔티티 형태: head와 tail이 실제 고유명사 엔티티인가? "~의 작품", "~의 데뷔곡", "~의 아버지" 같은
+   서술구/별칭 문구는 무효다.
+3. 관계 적합성: {r}의 의미에 head-tail 관계가 실제로 맞는가? (예: memberOf는 사람이 그 조직에 실제
+   소속일 때만 — 장치·작품·사건이 장소·조직의 "멤버"인 경우는 없다. 애매하면 무효로 판정)
+
+셋 다 만족해야 valid=true. 하나라도 걸리면 valid=false + 어느 기준에 걸렸는지 reason에 적어라.
+JSON만: {{"valid": true/false, "reason": "grounding|entity_shape|relation_fit|ok"}}"""
 
 REL_KO = {"bornIn": "태어난 곳", "diedIn": "죽은 곳", "locatedIn": "상위 지역",
           "capitalOf": "수도", "nationality": "국적", "studiedAt": "출신 학교",
@@ -171,27 +179,94 @@ def build(limit, all_paras=False, workers=8, checkpoint_every=200):
     print("관계 분포:", dict(rc.most_common()))
 
 
-def verify(n):
-    """엣지 n개 샘플 → solar-pro가 source 문단으로 뒷받침 여부 판정 (수검수 대체, 정밀도 추정)."""
+def _load_pid2text():
+    return {json.loads(l)["paragraph_id"]: json.loads(l)["text"]
+            for fp in ["data/corpus.jsonl", "data/corpus_2wiki.jsonl"]
+            if (ROOT / fp).exists() for l in open(ROOT / fp, encoding="utf-8")}
+
+
+def _judge_one(llm, h, t, d, pid2text, tries=3):
+    """워커 스레드. returns (h, t, d, valid, reason)."""
+    txt = pid2text.get(d["source_paragraph_id"], "")
+    last_err = None
+    for i in range(tries):
+        try:
+            out = llm.complete(VERIFY_PROMPT.format(h=h, r=d["relation"], t=t,
+                               desc=REL_KO.get(d["relation"], ""), text=txt[:2000]), schema=True)
+            valid = isinstance(out, dict) and bool(out.get("valid"))
+            reason = out.get("reason", "?") if isinstance(out, dict) else "parse_error"
+            return h, t, d, valid, reason
+        except Exception as e:
+            last_err = str(e)[:150]
+            if i < tries - 1:
+                time.sleep(2 ** (i + 1))
+    return h, t, d, False, f"error:{last_err}"          # 판정 실패는 탈락 취급(보수적)
+
+
+def verify(n, workers=6):
+    """엣지 n개 샘플 → 3기준(그라운딩·엔티티형태·관계적합성) 재판정 (수검수 대체, 정밀도 추정)."""
     llm = make_llm()
     G = pickle.load(open(ROOT / "data/graph.pkl", "rb"))
-    pid2text = {json.loads(l)["paragraph_id"]: json.loads(l)["text"]
-                for fp in ["data/corpus.jsonl", "data/corpus_2wiki.jsonl"]
-                if (ROOT / fp).exists() for l in open(ROOT / fp, encoding="utf-8")}
+    pid2text = _load_pid2text()
     all_edges = list(G.edges(data=True))
     random.seed(1)
     sample = random.sample(all_edges, min(n, len(all_edges)))
+
     ok = 0
-    for h, t, d in sample:
-        txt = pid2text.get(d["source_paragraph_id"], "")
-        out = llm.complete(VERIFY_PROMPT.format(h=h, r=d["relation"], t=t,
-                                                desc=REL_KO.get(d["relation"], ""), text=txt[:2000]), schema=True)
-        s = isinstance(out, dict) and out.get("supported")
-        ok += bool(s)
-        if not s:
-            print(f"  ✗ ({h}) -{d['relation']}-> ({t})")
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_judge_one, llm, h, t, d, pid2text) for h, t, d in sample]
+        for fut in as_completed(futures):
+            h, t, d, valid, reason = fut.result()
+            ok += valid
+            if not valid:
+                print(f"  ✗ [{reason}] ({h}) -{d['relation']}-> ({t})")
     print(f"\n정밀도(샘플 {len(sample)}): {ok}/{len(sample)} = {ok/len(sample):.0%} "
           f"({'PASS ≥85%' if ok/len(sample) >= 0.85 else '미달'})")
+
+
+def prune(workers=6):
+    """전체 엣지를 3기준으로 재판정해 탈락분을 제거한 새 그래프 저장 (Track 1).
+    ADR-1 철학(생성-심사 분리)을 그래프 구축에도 적용 — 원본은 백업(되돌리기 가능)."""
+    llm = make_llm()
+    gpath = ROOT / "data/graph.pkl"
+    G = pickle.load(open(gpath, "rb"))
+    pid2text = _load_pid2text()
+    all_edges = list(G.edges(data=True))
+    print(f"전체 엣지 {len(all_edges)}개 재판정 (동시 {workers}) — 원본은 graph_preprune_backup.pkl로 백업")
+
+    backup = ROOT / "data/graph_preprune_backup.pkl"
+    pickle.dump(G, open(backup, "wb"))
+
+    kept: list[tuple] = []
+    reason_counts: dict[str, int] = {}
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_judge_one, llm, h, t, d, pid2text) for h, t, d in all_edges]
+        for i, fut in enumerate(as_completed(futures), 1):
+            h, t, d, valid, reason = fut.result()
+            if valid:
+                kept.append((h, t, d))
+            else:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            if i % 100 == 0:
+                rate = i / (time.time() - t0)
+                eta = (len(all_edges) - i) / rate if rate else 0
+                print(f"  {i}/{len(all_edges)} · 유지 {len(kept)} · {rate:.1f}/s · ETA {eta/60:.0f}분", flush=True)
+
+    G2 = nx.DiGraph()
+    G2.graph["processed_pids"] = G.graph.get("processed_pids", set())
+    for h, t, d in kept:
+        for node in (h, t):
+            if node not in G2:
+                G2.add_node(node, type=G.nodes[node]["type"])
+        G2.add_edge(h, t, **d)
+    pickle.dump(G2, open(gpath, "wb"))
+
+    print(f"\n가지치기 완료 · {time.time()-t0:.0f}s")
+    print(f"엣지: {len(all_edges)} → {len(kept)} ({len(kept)/len(all_edges):.0%} 유지)")
+    print(f"노드: {G.number_of_nodes()} → {G2.number_of_nodes()}")
+    print("탈락 사유 분포:", dict(sorted(reason_counts.items(), key=lambda x: -x[1])))
+    print(f"복구하려면: cp {backup} {gpath}")
 
 
 if __name__ == "__main__":
@@ -200,5 +275,11 @@ if __name__ == "__main__":
     ap.add_argument("--all", action="store_true", help="main 코퍼스 전체 처리")
     ap.add_argument("--workers", type=int, default=8, help="동시 LLM 호출 수")
     ap.add_argument("--verify", type=int, default=0, help="기존 그래프 엣지 정확도 샘플 수")
+    ap.add_argument("--prune", action="store_true", help="전체 엣지 재판정 후 탈락분 제거 (Track 1)")
     a = ap.parse_args()
-    verify(a.verify) if a.verify else build(a.limit, all_paras=a.all, workers=a.workers)
+    if a.prune:
+        prune(workers=a.workers)
+    elif a.verify:
+        verify(a.verify, workers=a.workers)
+    else:
+        build(a.limit, all_paras=a.all, workers=a.workers)
