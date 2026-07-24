@@ -90,9 +90,10 @@ def _norm(s):
     return s.lower()
 
 
-EVAL_WORKERS = 3  # 문제: 8→4로 낮춰도 ours_g(hop 2개, 문항당 LLM호출 agent_basic보다 훨씬 많음)는
-# 127개 중 120개가 429 — arm마다 실효 부하가 달라 고정 숫자로는 못 맞춘다. 3으로 추가 인하 +
-# settings.yaml max_retries 2→6(SDK 지수백오프 예산 확대)을 함께 적용. 그래도 재발하면 더 낮출 것.
+EVAL_WORKERS = 2  # 문제: 3워커+max_retries 6에서도 ours_g 120건 중 112건이 그대로 429 —
+# 단일 격리 호출은 즉시 성공(계정 쿼터 소진 아님, 순간 동시부하형 RPM 리밋). 3스레드 동시 재시도가
+# 서로 백오프 타이밍이 겹쳐(thundering herd) 같은 포화 구간에 반복 진입한 것으로 추정. 2로 인하.
+# 이마저 안 되면 1(완전 순차)로 내릴 것 — 더 이상의 동시성 튜닝 시도는 여기서 중단.
 
 
 async def run_pipeline_mode(evalset, gold_answers, mode):
