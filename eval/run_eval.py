@@ -96,18 +96,34 @@ EVAL_WORKERS = 2  # 문제: 3워커+max_retries 6에서도 ours_g 120건 중 112
 # 이마저 안 되면 1(완전 순차)로 내릴 것 — 더 이상의 동시성 튜닝 시도는 여기서 중단.
 
 
-async def run_pipeline_mode(evalset, gold_answers, mode):
+def _agg_pipeline(mode, which, rows, note):
+    n = len(rows) or 1
+    em_scored = [r for r in rows if r["em"] is not None]
+    return {"mode": mode, "set": which,
+            "em_accuracy": sum(1 for r in em_scored if r["em"]) / (len(em_scored) or 1),
+            "em_scored_n": len(em_scored),
+            "avg_confidence": sum(r["confidence"] for r in rows) / n,
+            "status_counts": {s: sum(1 for r in rows if r["status"] == s) for s in {r["status"] for r in rows}},
+            "note": note}
+
+
+async def run_pipeline_mode(evalset, gold_answers, mode, which, out):
     """ours/ours_g/agent_basic: 실제 파이프라인 실행 → EM 기반 정답률(05 C3 Recall@k 전체는 후속,
     resolve_hop이 검색시점 문단 노출해야 함 — 오늘은 파이프라인 회복 자체를 EM으로 증명).
-    문제: llm.complete()/embedder.embed()가 usecase 내부에서 동기 블로킹 호출이라(await로 안 감쌈)
+    문제1: llm.complete()/embedder.embed()가 usecase 내부에서 동기 블로킹 호출이라(await로 안 감쌈)
     async def 구조여도 문항 간 병렬성이 전혀 없었다 — 127문항 순차 실행에 문항당 ~3분(hop별 LLM
     왕복 다수)씩 걸려 EVAL_WORKERS개 스레드로 문항을 동시 처리(각 스레드가 자체 이벤트루프로
-    asyncio.run 실행 — build_graph.py의 ThreadPoolExecutor 패턴과 동일)."""
+    asyncio.run 실행 — build_graph.py의 ThreadPoolExecutor 패턴과 동일).
+    문제2(2026-07-24): 끝에 한 번만 저장하는 구조라 429 재시도로 오래 걸려 중간에 끊으면(또는
+    끊어야 하면) 그때까지 진행분이 통째로 날아갔다(retry_errors.py에서 34분 작업 소실 실측).
+    완료되는 대로(as_completed) 매번 out에 체크포인트 저장하도록 변경 — eval/retry_errors.py와
+    동일 패턴."""
     sys.path.insert(0, str(ROOT / "src"))
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from verihop.bootstrap import build_pipeline
     import asyncio
     pipeline = build_pipeline(mode)
+    out.mkdir(parents=True, exist_ok=True)
 
     def _run_one(e):
         try:
@@ -115,18 +131,28 @@ async def run_pipeline_mode(evalset, gold_answers, mode):
             ans = r["answer"]
             gold = gold_answers.get(e["qid"], set())
             em = any(_norm(ans["text"]) == _norm(g) or _norm(g) in _norm(ans["text"]) for g in gold) if gold else None
-            row = {"qid": e["qid"], "question": e["question"], "answer": ans["text"],
-                   "status": ans["status"], "confidence": ans["confidence"], "em": em,
-                   "gold": list(gold)}
+            return {"qid": e["qid"], "question": e["question"], "answer": ans["text"],
+                    "status": ans["status"], "confidence": ans["confidence"], "em": em,
+                    "gold": list(gold)}
         except Exception as ex:
-            row = {"qid": e["qid"], "question": e["question"], "answer": None,
-                   "status": "ERROR", "confidence": 0.0, "em": False, "error": str(ex)}
-        print(f"  {row['qid']}: {row['status']} em={row['em']} → {row['answer']}", flush=True)
-        return row
+            return {"qid": e["qid"], "question": e["question"], "answer": None,
+                    "status": "ERROR", "confidence": 0.0, "em": False, "error": str(ex)}
 
+    rows_by_qid = {}
     with ThreadPoolExecutor(max_workers=EVAL_WORKERS) as ex:
-        rows = list(ex.map(_run_one, evalset))
-    return rows
+        futs = {ex.submit(_run_one, e): e for e in evalset}
+        for i, fut in enumerate(as_completed(futs), 1):
+            row = fut.result()
+            print(f"  {row['qid']}: {row['status']} em={row['em']} → {row['answer']}", flush=True)
+            rows_by_qid[row["qid"]] = row
+            rows = [rows_by_qid[e["qid"]] for e in evalset if e["qid"] in rows_by_qid]
+            agg = _agg_pipeline(mode, which, rows,
+                "05 C3 전체 Recall@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명")
+            json.dump(agg, open(out / "metrics.json", "w"), ensure_ascii=False, indent=2)
+            with open(out / "per_question.jsonl", "w", encoding="utf-8") as f:
+                for r in rows:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return [rows_by_qid[e["qid"]] for e in evalset]
 
 
 def main(mode, which, limit):
@@ -134,34 +160,27 @@ def main(mode, which, limit):
     evalset = load_eval(which, limit)
     print(f"[{mode}/{which}] {len(evalset)}문항")
 
+    run_id = f"{mode}_{which}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    out = ROOT / "results" / run_id
+
     if mode == "baseline":
         embedder = make_embedder(c)
         index, ids = load_index(c)
         rows = run_baseline(evalset, embedder, index, ids)
         agg = metrics.aggregate([{"ranked": r["ranked"], "gold": set(r["gold"])} for r in rows])
+        out.mkdir(parents=True, exist_ok=True)
+        json.dump({"mode": mode, "set": which, **agg}, open(out / "metrics.json", "w"),
+                  ensure_ascii=False, indent=2)
+        with open(out / "per_question.jsonl", "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
     else:
         import asyncio
         gold_answers = load_eval_answers(which)
-        rows = asyncio.run(run_pipeline_mode(evalset, gold_answers, mode))
-        n = len(rows) or 1
-        em_scored = [r for r in rows if r["em"] is not None]
-        agg = {
-            "em_accuracy": sum(1 for r in em_scored if r["em"]) / (len(em_scored) or 1),
-            "em_scored_n": len(em_scored),
-            "avg_confidence": sum(r["confidence"] for r in rows) / n,
-            "status_counts": {s: sum(1 for r in rows if r["status"] == s)
-                              for s in {r["status"] for r in rows}},
-            "note": "05 C3 전체 Recall@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명",
-        }
+        rows = asyncio.run(run_pipeline_mode(evalset, gold_answers, mode, which, out))  # 매 문항마다 out에 체크포인트 저장
+        agg = _agg_pipeline(mode, which, rows,
+            "05 C3 전체 Recall@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명")
 
-    run_id = f"{mode}_{which}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    out = ROOT / "results" / run_id
-    out.mkdir(parents=True, exist_ok=True)
-    json.dump({"mode": mode, "set": which, **agg}, open(out / "metrics.json", "w"),
-              ensure_ascii=False, indent=2)
-    with open(out / "per_question.jsonl", "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
     print(f"→ results/{run_id}/metrics.json")
     if mode == "baseline":
         print(f"  Recall@5={agg['recall@5']:.1%}  @10={agg['recall@10']:.1%}  "
