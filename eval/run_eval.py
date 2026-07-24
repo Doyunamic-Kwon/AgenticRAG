@@ -90,26 +90,39 @@ def _norm(s):
     return s.lower()
 
 
+EVAL_WORKERS = 8  # 실측 안전선(그래프 재추출 8워커·199건 중 1건만 실패) — scratchpad rate_limit 테스트로 상한 확인
+
+
 async def run_pipeline_mode(evalset, gold_answers, mode):
     """ours/ours_g/agent_basic: 실제 파이프라인 실행 → EM 기반 정답률(05 C3 Recall@k 전체는 후속,
-    resolve_hop이 검색시점 문단 노출해야 함 — 오늘은 파이프라인 회복 자체를 EM으로 증명)."""
+    resolve_hop이 검색시점 문단 노출해야 함 — 오늘은 파이프라인 회복 자체를 EM으로 증명).
+    문제: llm.complete()/embedder.embed()가 usecase 내부에서 동기 블로킹 호출이라(await로 안 감쌈)
+    async def 구조여도 문항 간 병렬성이 전혀 없었다 — 127문항 순차 실행에 문항당 ~3분(hop별 LLM
+    왕복 다수)씩 걸려 EVAL_WORKERS개 스레드로 문항을 동시 처리(각 스레드가 자체 이벤트루프로
+    asyncio.run 실행 — build_graph.py의 ThreadPoolExecutor 패턴과 동일)."""
     sys.path.insert(0, str(ROOT / "src"))
+    from concurrent.futures import ThreadPoolExecutor
     from verihop.bootstrap import build_pipeline
+    import asyncio
     pipeline = build_pipeline(mode)
-    rows = []
-    for e in evalset:
+
+    def _run_one(e):
         try:
-            r = await pipeline(e["question"])
+            r = asyncio.run(pipeline(e["question"]))
             ans = r["answer"]
             gold = gold_answers.get(e["qid"], set())
             em = any(_norm(ans["text"]) == _norm(g) or _norm(g) in _norm(ans["text"]) for g in gold) if gold else None
-            rows.append({"qid": e["qid"], "question": e["question"], "answer": ans["text"],
-                        "status": ans["status"], "confidence": ans["confidence"], "em": em,
-                        "gold": list(gold)})
+            row = {"qid": e["qid"], "question": e["question"], "answer": ans["text"],
+                   "status": ans["status"], "confidence": ans["confidence"], "em": em,
+                   "gold": list(gold)}
         except Exception as ex:
-            rows.append({"qid": e["qid"], "question": e["question"], "answer": None,
-                        "status": "ERROR", "confidence": 0.0, "em": False, "error": str(ex)})
-        print(f"  {e['qid']}: {rows[-1]['status']} em={rows[-1]['em']} → {rows[-1]['answer']}", flush=True)
+            row = {"qid": e["qid"], "question": e["question"], "answer": None,
+                   "status": "ERROR", "confidence": 0.0, "em": False, "error": str(ex)}
+        print(f"  {row['qid']}: {row['status']} em={row['em']} → {row['answer']}", flush=True)
+        return row
+
+    with ThreadPoolExecutor(max_workers=EVAL_WORKERS) as ex:
+        rows = list(ex.map(_run_one, evalset))
     return rows
 
 
