@@ -90,7 +90,10 @@ def _norm(s):
     return s.lower()
 
 
-EVAL_WORKERS = 8  # 실측 안전선(그래프 재추출 8워커·199건 중 1건만 실패) — scratchpad rate_limit 테스트로 상한 확인
+EVAL_WORKERS = 4  # 문제: 8은 그래프추출(문단당 1콜) 기준 안전선이었는데, 파이프라인은 문항당
+# hop별 다중 LLM 호출(추출·검증·재질의)이라 실효 부하가 더 커서 8에서 429 다발(127개 중 26개
+# ERROR 실측). 4로 낮춤 — 추후 429가 재발하면 더 낮추고, SDK 재시도(max_retries)로 흡수 안 되는
+# 수준의 429는 이 워커 수 자체가 너무 높다는 뜻이니 낮추는 게 맞다.
 
 
 async def run_pipeline_mode(evalset, gold_answers, mode):
