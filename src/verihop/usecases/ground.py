@@ -14,6 +14,12 @@ TIEBREAK_PROMPT = """질문 의도상 다음 관계 이름 '{relation}'과 가�
 후보: {candidates}
 JSON만: {{"choice": "후보 중 하나 그대로"}}"""
 
+# 문제(2026-07-24): 앵커 임베딩 폴백이 매번 graph.all_nodes() 전체(6,000개+)를 다시 임베딩해
+# 폴백 1회당 배치(32개씩) ~200개 요청이 나갔다 — RPM 100 한도를 그 한 번으로 넘겨버려 4-worker
+# 파이프라인에서 지속 429의 실제 원인이었다(LLM 콜만 스로틀했던 첫 시도들이 안 먹힌 이유).
+# 그래프는 한 프로세스 안에서 안 바뀌므로 노드 임베딩을 id(graph) 기준으로 캐싱해 최초 1회만 계산.
+_node_vec_cache: dict[int, tuple[list, list]] = {}
+
 
 def _is_ref(start: str) -> bool:
     return bool(_REF.match(start))
@@ -26,6 +32,18 @@ def _cos(a, b):
     return dot / (na * nb) if na and nb else 0.0
 
 
+def _cached_node_vecs(graph, embedder):
+    # graph.all_nodes()는 매 호출 새 리스트를 반환해(NetworkxGraph.all_nodes) 리스트 identity로는
+    # 캐시 적중을 못 본다 — graph 객체 자체의 id로만 판단(한 프로세스 안에서 graph는 안 바뀜).
+    key = id(graph)
+    if key in _node_vec_cache:
+        return _node_vec_cache[key]
+    nodes = graph.all_nodes()
+    node_vs = embedder.embed(nodes) if nodes else []
+    _node_vec_cache[key] = (nodes, node_vs)
+    return nodes, node_vs
+
+
 def _ground_anchor(hop, graph, alias, embedder, anchor_sim_threshold):
     if _is_ref(hop["start"]):
         return None                                   # {n} 참조는 실행 시점에 해석 (ADR-3), 여기선 미해결
@@ -36,11 +54,10 @@ def _ground_anchor(hop, graph, alias, embedder, anchor_sim_threshold):
         return node
     if graph.exists(name):
         return name
-    nodes = graph.all_nodes()                         # alias exact 실패 → 임베딩 top-1 폴백
+    nodes, node_vs = _cached_node_vecs(graph, embedder)  # alias exact 실패 → 임베딩 top-1 폴백
     if not nodes:
         return None
-    vecs = embedder.embed([name] + nodes)
-    qv, node_vs = vecs[0], vecs[1:]
+    qv = embedder.embed([name])[0]
     sims = [_cos(qv, nv) for nv in node_vs]
     best_i = max(range(len(sims)), key=lambda i: sims[i])
     return nodes[best_i] if sims[best_i] >= anchor_sim_threshold else None   # 미해결 → graph_miss
