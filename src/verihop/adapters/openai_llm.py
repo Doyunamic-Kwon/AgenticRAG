@@ -24,7 +24,9 @@ import time
 import threading
 from openai import OpenAI, APIStatusError
 
-_TOKEN_HEADROOM = 3000  # 다음 콜(추출 프롬프트는 문단 포함이라 더 큼) 하나 여유는 남기고 대기
+_TOKEN_HEADROOM = 6000  # 실측: 추출 콜(문단 8개 포함)이 이미 ~2,715토큰 — 3,000은 여유가 없어
+# remaining이 문턱보다 커도 다음 콜 하나가 바로 남은 예산을 넘겨 429가 반복됐다. 최대 관측
+# 콜 크기의 2배 이상으로 여유를 둠.
 
 
 def _parse_json(text: str):
@@ -41,10 +43,14 @@ class OpenAILLM:
     def __init__(self, api_key: str, base_url: str, model: str,
                  temperature: float = 0.0, max_retries: int = 2, timeout: float = 60):
         # timeout: 요청당 상한(초). 없으면 solar가 매달려 배치가 무한 정지(실측).
-        self.client = OpenAI(api_key=api_key, base_url=base_url,
-                             max_retries=max_retries, timeout=timeout)
+        # 문제: SDK 자체 max_retries(지수백오프, 헤더 무지)와 아래 _create()의 헤더 기반
+        # 재시도가 중첩되면 최대 max_retries×_create시도 횟수만큼 눈먼 재시도가 쌓여 오히려
+        # 느려지고 예측 불가능해진다(실측: 73건 재시도 후에도 전부 429로 무변화). SDK 쪽은
+        # 항상 0으로 끄고, max_retries 인자는 _create()의 자체 재시도 횟수로 대신 쓴다.
+        self.client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=timeout)
         self.model = model
         self.temperature = temperature
+        self._max_retries = max(max_retries, 3)
         self._budget_lock = threading.Lock()
         self._remaining_tokens = None
         self._reset_at = None
@@ -76,7 +82,7 @@ class OpenAILLM:
         return _parse_json(text) if schema is not None else text
 
     def _create(self, msgs, kwargs):
-        for _ in range(3):                      # 429 자체 재시도(리셋 대기) + response_format 폴백 여유
+        for _ in range(self._max_retries):      # 429 자체 재시도(리셋 대기) + response_format 폴백 여유
             self._throttle()
             try:
                 raw = self.client.chat.completions.with_raw_response.create(
@@ -91,4 +97,4 @@ class OpenAILLM:
                 raise
             self._update_budget(raw.headers)
             return raw
-        raise RuntimeError("OpenAILLM._create: 429 재시도 예산(3회) 소진")
+        raise RuntimeError(f"OpenAILLM._create: 429 재시도 예산({self._max_retries}회) 소진")
