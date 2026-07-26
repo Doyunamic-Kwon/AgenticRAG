@@ -3,11 +3,22 @@ implements: verihop.ports.LLMPort
 schema 지정 시 JSON을 파싱해 dict 반환 (response_format json_object 시도 + 방어적 파싱).
 재시도는 SDK max_retries. 비용집계는 추후(W2.2).
 서드파티 import는 이 계층에서만 허용. usecase는 이 파일의 존재를 모른다.
+
+레이트리밋 스로틀(2026-07-24): 429가 왜 나는지 추측 대신 실측했다 — Upstage가 모든 응답에
+x-upstage-ratelimit-remaining-tokens·-reset-tokens 헤더로 실시간 잔여 TPM 예산을 알려준다
+(실측: 100 RPM, 50,000 TPM). decompose 프롬프트 하나가 이미 ~1,650토큰(스키마+예시 포함)이라
+동시성을 아무리 낮춰도 이 헤더를 안 보면 매번 추측샷이 된다. 매 응답마다 헤더를 읽어 잔여
+토큰이 여유 문턱 밑이면 리셋 시각까지 자체적으로 대기 — 클라이언트 쪽 추정치 대신 서버가
+알려준 실제 잔여량을 그대로 쓰므로 워커 수와 무관하게 항상 예산 안에서만 호출한다.
 """
 from __future__ import annotations
 import json
 import re
+import time
+import threading
 from openai import OpenAI
+
+_TOKEN_HEADROOM = 3000  # 다음 콜(추출 프롬프트는 문단 포함이라 더 큼) 하나 여유는 남기고 대기
 
 
 def _parse_json(text: str):
@@ -28,18 +39,42 @@ class OpenAILLM:
                              max_retries=max_retries, timeout=timeout)
         self.model = model
         self.temperature = temperature
+        self._budget_lock = threading.Lock()
+        self._remaining_tokens = None
+        self._reset_at = None
+
+    def _throttle(self):
+        """직전 응답 헤더가 알려준 실시간 잔여 TPM을 보고, 부족하면 리셋까지 대기(멀티스레드 공유)."""
+        with self._budget_lock:
+            remaining, reset_at = self._remaining_tokens, self._reset_at
+        if remaining is not None and remaining < _TOKEN_HEADROOM and reset_at:
+            wait = reset_at - time.time()
+            if wait > 0:
+                time.sleep(wait + 0.5)
+
+    def _update_budget(self, headers):
+        try:
+            remaining = int(headers.get("x-upstage-ratelimit-remaining-tokens"))
+            reset_at = int(headers.get("x-upstage-ratelimit-reset-tokens"))
+        except (TypeError, ValueError):
+            return
+        with self._budget_lock:
+            self._remaining_tokens, self._reset_at = remaining, reset_at
 
     def complete(self, prompt: str, *, schema: dict | None = None) -> object:
         msgs = [{"role": "user", "content": prompt}]
         kwargs = {"response_format": {"type": "json_object"}} if schema is not None else {}
+        self._throttle()
         try:
-            resp = self.client.chat.completions.create(
+            raw = self.client.chat.completions.with_raw_response.create(
                 model=self.model, temperature=self.temperature, messages=msgs, **kwargs)
         except Exception:
             if kwargs:                          # response_format 미지원 모델 폴백
-                resp = self.client.chat.completions.create(
+                raw = self.client.chat.completions.with_raw_response.create(
                     model=self.model, temperature=self.temperature, messages=msgs)
             else:
                 raise
+        self._update_budget(raw.headers)
+        resp = raw.parse()
         text = resp.choices[0].message.content
         return _parse_json(text) if schema is not None else text
