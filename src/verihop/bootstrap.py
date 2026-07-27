@@ -37,9 +37,11 @@ def _load_relations():
     return schema, desc, r["types"]
 
 
-def build_adapters(settings, llm_provider=None):
+def build_adapters(settings, llm_provider=None, tracer=None):
     """provider별 어댑터 생성. llm_provider 오버라이드는 Ours-G/Agent-basic 실험용이 아니라
-    제공자 전환용(quad/llm_judge 전환은 verifier 함수로, 09.md ADR-4)."""
+    제공자 전환용(quad/llm_judge 전환은 verifier 함수로, 09.md ADR-4).
+    tracer: 기본은 JsonTracer(메모리 누적)지만, 데모 UI의 실시간 4패널 시각화처럼 이벤트를
+    스레드 밖(폴링 루프)으로 즉시 흘려보내야 하면 QueueTracer 등 다른 TracerPort 구현을 주입."""
     from verihop.adapters.openai_llm import OpenAILLM
     from verihop.adapters.openai_embedder import OpenAIEmbedder
     from verihop.adapters.faiss_index import FaissIndex
@@ -61,7 +63,7 @@ def build_adapters(settings, llm_provider=None):
     vector = FaissIndex(vdir, embedder, [ROOT / "data/corpus.jsonl", ROOT / "data/corpus_2wiki.jsonl",
                                          ROOT / "data/corpus_demo.jsonl"])
     graph = NetworkxGraph(str(ROOT / "data/graph.pkl"))
-    tracer = JsonTracer()
+    tracer = tracer if tracer is not None else JsonTracer()
     alias = json.load(open(ROOT / "data/alias.json", encoding="utf-8"))
     return {"llm": llm, "embedder": embedder, "vector": vector, "graph": graph,
             "tracer": tracer, "alias": alias}
@@ -95,6 +97,7 @@ async def run_pipeline(raw_question, adapters, settings, schema, relation_desc, 
     verifier: None이면 quad(domain.verify_rules.decide). Ours-G/Agent-basic은 llm_judge_verifier 전달."""
     verifier = verifier or verify_rules.decide
     alias = adapters["alias"]
+    tracer = adapters["tracer"]
 
     corr = correct(raw_question, alias)
 
@@ -105,11 +108,14 @@ async def run_pipeline(raw_question, adapters, settings, schema, relation_desc, 
                       "expected": {"type": "", "definition": corr["corrected_question"]},
                       "anchor_meta": {"name": None, "disambiguator": None},
                       "sub_query": corr["corrected_question"], "hint_relations": None}
+        tracer.emit({"type": "plan_ready", "hops": [pseudo_hop], "mode": "agent_basic"})
         state = _state(adapters, settings, relation_desc)
         r = await resolve_hop(pseudo_hop, state, verifier=llm_judge_verifier)
-        return {"mode": mode, "answer": {"text": r["answer"], "status": "ANSWERED" if r["status"] == "OK" else "UNVERIFIABLE",
+        result = {"mode": mode, "answer": {"text": r["answer"], "status": "ANSWERED" if r["status"] == "OK" else "UNVERIFIABLE",
                 "confidence": 0.5, "path_check": None, "evidence": [], "verified_until": None},
                 "hop_results": {1: r}, "hops": [pseudo_hop]}
+        tracer.emit({"type": "final", "answer": result["answer"]})
+        return result
 
     dec = decompose(corr["corrected_question"], corr["unresolved"], adapters["llm"],
                     schema_relations=schema, types=types, alias_names=_leak_check_alias_names(adapters))
@@ -121,12 +127,16 @@ async def run_pipeline(raw_question, adapters, settings, schema, relation_desc, 
                       "expected": {"type": "", "definition": dec["corrected_question"]},
                       "anchor_meta": {"name": None, "disambiguator": None},
                       "sub_query": dec["corrected_question"], "hint_relations": None}
+        tracer.emit({"type": "plan_ready", "hops": [pseudo_hop], "mode": "SIMPLE"})
         r = await resolve_hop(pseudo_hop, state, verifier=verifier)
-        return {"mode": "SIMPLE", "answer": {"text": r["answer"],
+        result = {"mode": "SIMPLE", "answer": {"text": r["answer"],
                 "status": "ANSWERED" if r["status"] == "OK" else "UNVERIFIABLE",
                 "confidence": 0.5, "path_check": None, "evidence": [], "verified_until": None},
                 "hop_results": {1: r}, "hops": [pseudo_hop]}
+        tracer.emit({"type": "final", "answer": result["answer"]})
+        return result
 
+    tracer.emit({"type": "plan_ready", "hops": dec["hops"], "mode": "FULL"})
     state = _state(adapters, settings, relation_desc)
 
     async def _rh(hop, st):
@@ -141,6 +151,7 @@ async def run_pipeline(raw_question, adapters, settings, schema, relation_desc, 
 
     hop_results = await execute(dec["hops"], _rh, state)
     answer = finalize(dec["hops"], hop_results, dec.get("final_op"), graph=adapters["graph"], alias=alias)
+    tracer.emit({"type": "final", "answer": answer})
     return {"mode": mode, "answer": answer, "hop_results": hop_results, "hops": dec["hops"],
             "decompose": dec, "corrections": corr}
 
@@ -156,11 +167,13 @@ def _state(adapters, settings, relation_desc):
             "pid2text": adapters["vector"].pid2text}       # 그래프 근거 문단 desc_check용 (FaissIndex 재사용)
 
 
-def build_pipeline(mode="FULL"):
-    """returns callable(question:str) -> awaitable result dict. bootstrap의 유일한 조립 지점."""
+def build_pipeline(mode="FULL", tracer=None):
+    """returns callable(question:str) -> awaitable result dict. bootstrap의 유일한 조립 지점.
+    tracer 주입은 데모 UI의 실시간 4패널 시각화용(각 arm이 자기 QueueTracer를 가져야 이벤트가
+    패널끼리 안 섞인다) — eval 하네스는 기본값(JsonTracer)을 그대로 쓰므로 영향 없음."""
     settings = _load_settings()
     schema, relation_desc, types = _load_relations()
-    adapters = build_adapters(settings)
+    adapters = build_adapters(settings, tracer=tracer)
     verifier = llm_judge_verifier if mode in ("ours_g", "agent_basic") else None
     run_mode = "FULL" if mode == "ours_g" else mode
 
