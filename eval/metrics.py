@@ -1,8 +1,11 @@
-"""검색 품질 지표 — 순수 함수 (05 §3). ranked=문단ID 리스트(상위순), gold=정답 문단ID 집합."""
+"""검색 품질 지표 — 순수 함수 (05 §3). ranked=문단ID 리스트(상위순), gold=정답 문단ID 집합.
+gold가 문항당 1개뿐이라 hits_at_k(top-k 안에 있으면 1, 없으면 0)가 전통적 Recall@k(여러
+정답 중 몇 개를 찾았는지 비율)와 수학적으로 동일해진다 — 그래서 지표명은 Recall이 아니라
+Hits@k(=Hit Rate@k)로 정확히 부른다(2026-07-27)."""
 import math
 
 
-def recall_at_k(ranked, gold, k):
+def hits_at_k(ranked, gold, k):
     return 1.0 if any(p in gold for p in ranked[:k]) else 0.0
 
 
@@ -24,16 +27,16 @@ def aggregate(rows):
     n = len(rows) or 1
     return {
         "n": len(rows),
-        "recall@5": sum(recall_at_k(r["ranked"], r["gold"], 5) for r in rows) / n,
-        "recall@10": sum(recall_at_k(r["ranked"], r["gold"], 10) for r in rows) / n,
+        "hits@5": sum(hits_at_k(r["ranked"], r["gold"], 5) for r in rows) / n,
+        "hits@10": sum(hits_at_k(r["ranked"], r["gold"], 10) for r in rows) / n,
         "mrr": sum(mrr(r["ranked"], r["gold"]) for r in rows) / n,
         "ndcg@10": sum(ndcg_at_k(r["ranked"], r["gold"], 10) for r in rows) / n,
     }
 
 
 def demo():
-    assert recall_at_k(["a", "b", "c"], {"c"}, 5) == 1.0
-    assert recall_at_k(["a", "b", "c"], {"c"}, 2) == 0.0
+    assert hits_at_k(["a", "b", "c"], {"c"}, 5) == 1.0
+    assert hits_at_k(["a", "b", "c"], {"c"}, 2) == 0.0
     assert mrr(["a", "b", "c"], {"b"}) == 0.5
     assert abs(ndcg_at_k(["a", "b"], {"a"}, 10) - 1.0) < 1e-9
     assert abs(ndcg_at_k(["b", "a"], {"a"}, 10) - 1 / math.log2(3)) < 1e-9
