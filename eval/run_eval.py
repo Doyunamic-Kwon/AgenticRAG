@@ -159,7 +159,7 @@ async def run_pipeline_mode(evalset, gold_answers, mode, which, out):
             rows_by_qid[row["qid"]] = row
             rows = [rows_by_qid[e["qid"]] for e in evalset if e["qid"] in rows_by_qid]
             agg = _agg_pipeline(mode, which, rows,
-                "05 C3 전체 Recall@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명")
+                "05 C3 전체 Hits@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명")
             json.dump(agg, open(out / "metrics.json", "w"), ensure_ascii=False, indent=2)
             with open(out / "per_question.jsonl", "w", encoding="utf-8") as f:
                 for r in rows:
@@ -191,11 +191,11 @@ def main(mode, which, limit):
         gold_answers = load_eval_answers(which)
         rows = asyncio.run(run_pipeline_mode(evalset, gold_answers, mode, which, out))  # 매 문항마다 out에 체크포인트 저장
         agg = _agg_pipeline(mode, which, rows,
-            "05 C3 전체 Recall@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명")
+            "05 C3 전체 Hits@k(검색시점 합집합 재랭킹)는 후속 — 오늘은 최종답 EM으로 회복 증명")
 
     print(f"→ results/{run_id}/metrics.json")
     if mode == "baseline":
-        print(f"  Recall@5={agg['recall@5']:.1%}  @10={agg['recall@10']:.1%}  "
+        print(f"  Hits@5={agg['hits@5']:.1%}  @10={agg['hits@10']:.1%}  "
               f"MRR={agg['mrr']:.3f}  nDCG@10={agg['ndcg@10']:.3f}")
     else:
         print(f"  EM정답률={agg['em_accuracy']:.1%} (n={agg['em_scored_n']})  "
