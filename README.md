@@ -24,15 +24,18 @@ flowchart LR
 ## 진행 현황
 
 - [x] W0.1 KorQuAD 수율 체크 — 가정 2개 확인
-- [x] W1.1 코퍼스 구축 (10,667문단, KorQuAD + 2Wiki 적응)
-- [x] W1.2 FAISS 인덱싱 + 검색 스팟체크 (단일홉 n=5000: R@10 98.5%)
-- [x] W1.3 지식그래프 (전체 코퍼스 → 가지치기로 정밀도 70%→**98%** 복구, 4,854엣지, 85% 게이트 PASS)
-- [x] W1.5 Baseline 측정 **(게이트)** — 단일홉 98.7% vs 멀티홉 61.5%
-- [x] W2 코어 파이프라인 E2E (분해·그라운딩·검증·재질의·응답조립) — 26문항 실행, 메커니즘 검증됨
-- [x] W4.1 4-arm 비교 재실행(98% 정밀도) — EM 동률 11.5%(불변), **고신뢰오답은 Ours만 0건**(Agent-basic 3·Ours−G 4)
+- [x] W1.1 코퍼스 구축 (10,871문단, KorQuAD + 2Wiki 적응 + 데모용 5문서)
+- [x] W1.2 FAISS 인덱싱(Chroma에서 변경, ADR-11) + 검색 스팟체크
+- [x] W1.3 지식그래프 (전체 코퍼스 22.8배 확대 → 가지치기로 정밀도 70%→**98%** 복구, 6,313노드·5,438엣지)
+- [x] W1.5 Baseline 측정 **(게이트)** — 멀티홉(2Wiki 적응 127문항) Recall@5 40.2% / @10 48.8%
+- [x] W2 코어 파이프라인 E2E (분해·그라운딩·검증·재질의·응답조립)
 - [x] 일반 RAG 대조군(`plain_rag.py`) — 시연 대시보드용, 임베딩검색+LLM답변만
 - [x] **W3.4 게이트: 시나리오 B 최초 완전 재현** — 모차르트→bornIn→잘츠부르크→hostsEvent→잘츠부르크 페스티벌, ANSWERED·confidence 0.85·path_check True
-- [ ] W4.3 **게이트: Ours > Agent-basic(EM)** — 아직 미확정(N=26 노이즈 범위). 고신뢰오답 KPI(05 §4)는 충족
+- [x] **W4.3 게이트: Ours > Agent-basic 통과(2026-07-27)** — 멀티홉 127문항(gold 오염 4건 제외, n=123).
+      raw EM은 Ours 5.7% > Agent-basic 4.1%. 핵심 KPI인 고신뢰오답 비율(05 §4, ANSWERED인데
+      오답)은 Agent-basic **100%**(13/13 전부 오답) vs Ours **50%**(6건 중 3건)로 목표
+      ("Agent-basic 대비 절반 이하")를 정확히 충족. 단, ANSWERED 절대 표본이 작다(13건·6건)는
+      한계가 있음 — 상세: [Docs/문제점.md](Docs/문제점.md), [진행기록](Docs/진행기록.md)
 
 ## W0.1 수율 체크 결과
 
@@ -73,10 +76,12 @@ pie showData title 브릿지 relation 분포 (스키마 10종)
 ```
 configs/     settings.yaml · relations.yaml · prompts/
 src/verihop/ domain(순수 규칙) ← usecases(오케스트레이션) ← adapters(구현) ← bootstrap
-             ports.py(seam 5개) · models.py(§0)
-scripts/     w0_yield_check · build_corpus · build_index · build_graph · build_multihop_set
-eval/        run_eval · metrics · report
-apps/        cli · streamlit_app
+             ports.py(seam 5개) · models.py(§0) · plain_rag.py(일반 RAG 대조군)
+scripts/     w0_yield_check · build_corpus · build_index · build_graph · build_alias
+             build_multihop_set(KorQuAD 브릿지, 미사용) · build_2wiki_ko(2Wiki 적응, 실사용)
+             add_demo_corpus
+eval/        run_eval · retry_errors(ERROR만 재시도) · metrics
+apps/        cli · plain_rag_cli · streamlit_app(데모 UI)
 tools/       check_layers.sh (계층 의존 게이트)
 ```
 
@@ -85,7 +90,22 @@ tools/       check_layers.sh (계층 의존 게이트)
 ## 실행
 
 ```bash
-# W0.1: KorQuAD 1.0 train+dev JSON을 data/raw/ 에 두고
-python3 scripts/w0_yield_check.py     # → data/w0/report.md
+# 데모 UI (시나리오 A/B/C 프리셋, hop trace·검증뱃지·일반 RAG 비교 패널)
+streamlit run apps/streamlit_app.py
+
+# 4-arm 평가 (baseline은 Recall@k, 나머지는 EM)
+python3 eval/run_eval.py --mode baseline --set multi
+python3 eval/run_eval.py --mode agent_basic --set multi
+python3 eval/run_eval.py --mode ours_g --set multi
+python3 eval/run_eval.py --mode ours --set multi
+# 레이트리밋 등으로 일부 ERROR 나면(results/{run_id}/per_question.jsonl에 status=ERROR)
+python3 eval/retry_errors.py results/{run_id}
+
+# 데이터 파이프라인 처음부터(W0~W1) 다시 만들 때
+python3 scripts/w0_yield_check.py     # KorQuAD 1.0 train+dev JSON을 data/raw/ 에 두고 실행
 python3 scripts/build_corpus.py       # → data/corpus.jsonl
+python3 scripts/build_2wiki_ko.py --n 150 --pages 128   # → data/eval/multihop_2wiki.jsonl
+python3 scripts/build_index.py
+python3 scripts/build_graph.py --all --workers 4
+python3 scripts/build_alias.py
 ```
