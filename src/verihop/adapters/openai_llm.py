@@ -30,7 +30,8 @@ from openai import OpenAI, APIStatusError
 _TPM_BUDGET = 30000    # Upstage 기준값(50,000의 60%). gpt-4o-mini(2026-07-27) 전환 후 실측
 # 헤더는 5,000 RPM/4,000,000 TPM으로 훨씬 넉넉하고 값도 정상 갱신됨(Upstage와 달리 신뢰 가능)
 # — provider별로 예산이 달라 아래에서 model 문자열로 분기해 override.
-_TPM_BUDGET_BY_MODEL = {"gpt-4o-mini": 2000000}   # 실측치의 50% 여유
+_TPM_BUDGET_BY_MODEL = {"gpt-4o-mini": 1000000}   # 실측치(4M)의 25% — 여러 run_eval.py 프로세스를
+# 동시에 띄울 걸 감안(각자 독립된 예산 추적이라 프로세스 수만큼 나눠 잡아야 실제 한도 안에 든다)
 _TPM_WINDOW = 60        # 초. Upstage 문서상 interval=minute
 _CHARS_PER_TOKEN = 2.2  # 실측(decompose 3738자→1453 prompt-tokens, 추출 6132자→2622 prompt-tokens)
 _COMPLETION_BUFFER = 400  # 응답 토큰 여유분(추정치에 더함)
