@@ -27,7 +27,10 @@ import threading
 import collections
 from openai import OpenAI, APIStatusError
 
-_TPM_BUDGET = 30000    # 문서상 50,000의 60% — 헤더를 못 믿는 상황이라 보수적으로
+_TPM_BUDGET = 30000    # Upstage 기준값(50,000의 60%). gpt-4o-mini(2026-07-27) 전환 후 실측
+# 헤더는 5,000 RPM/4,000,000 TPM으로 훨씬 넉넉하고 값도 정상 갱신됨(Upstage와 달리 신뢰 가능)
+# — provider별로 예산이 달라 아래에서 model 문자열로 분기해 override.
+_TPM_BUDGET_BY_MODEL = {"gpt-4o-mini": 2000000}   # 실측치의 50% 여유
 _TPM_WINDOW = 60        # 초. Upstage 문서상 interval=minute
 _CHARS_PER_TOKEN = 2.2  # 실측(decompose 3738자→1453 prompt-tokens, 추출 6132자→2622 prompt-tokens)
 _COMPLETION_BUFFER = 400  # 응답 토큰 여유분(추정치에 더함)
@@ -53,6 +56,7 @@ class OpenAILLM:
         self.model = model
         self.temperature = temperature
         self._max_retries = max(max_retries, 3)
+        self._tpm_budget = _TPM_BUDGET_BY_MODEL.get(model, _TPM_BUDGET)
         self._budget_lock = threading.Lock()
         self._usage_log = collections.deque()  # [[timestamp, tokens], ...] 슬라이딩 윈도우(실측치)
 
@@ -65,7 +69,7 @@ class OpenAILLM:
                 while self._usage_log and self._usage_log[0][0] < now - _TPM_WINDOW:
                     self._usage_log.popleft()
                 used = sum(t for _, t in self._usage_log)
-                if used <= _TPM_BUDGET or not self._usage_log:
+                if used <= self._tpm_budget or not self._usage_log:
                     return
                 oldest_ts = self._usage_log[0][0]
             time.sleep(max(0.3, _TPM_WINDOW - (time.time() - oldest_ts) + 0.2))

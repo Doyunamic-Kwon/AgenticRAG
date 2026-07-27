@@ -103,11 +103,9 @@ def _norm(s):
     return s.lower()
 
 
-EVAL_WORKERS = 4  # 근본원인 실측(2026-07-24): Upstage 응답 헤더로 확인한 실제 한도는 100 RPM /
-# 50,000 TPM. openai_llm.py가 이제 이 헤더를 매 콜마다 읽어 잔여 토큰이 부족하면 자체적으로
-# 대기하므로(스레드 공유) 워커 수를 늘려도 예산을 넘겨 429를 유발하지 않는다 — 동시성 자체보다
-# 개별 콜의 토큰 크기(decompose 프롬프트만 ~1,650토큰)가 병목이었음을 확인했으므로 이전의
-# "워커 수를 계속 낮추는" 접근은 근본 대응이 아니었다.
+EVAL_WORKERS = 8  # 2026-07-27: LLM을 gpt-4o-mini로 전환(실측 5,000 RPM/4,000,000 TPM,
+# Upstage 100 RPM/50,000 TPM 대비 훨씬 여유)해 4→8로 상향. 임베딩은 여전히 Upstage라(차원
+# 문제로 유지) 그쪽이 새 병목이 될 수 있음 — openai_embedder.py의 자체 RPM 스로틀이 보호.
 
 
 def _agg_pipeline(mode, which, rows, note):
