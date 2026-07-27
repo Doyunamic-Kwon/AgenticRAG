@@ -1,5 +1,7 @@
 providers:                          # 무료 테스트 우선. openai는 후순위(유료·성능 미달 시만)
-  llm: upstage                      # upstage | naver | openai
+  llm: openai                       # upstage | naver | openai — 2026-07-27: Upstage 무료 티어
+  # 레이트리밋(100 RPM/50,000 TPM)이 4-arm 평가엔 너무 빠듯해 gpt-4o-mini(Tier 1 기준 500 RPM/
+  # 200,000+ TPM)로 임시 전환. 임베딩은 그대로 Upstage(차원 다르면 FAISS 재인덱싱 필요해서 유지).
   embedding: upstage
 llm:
   temperature: 0.0
