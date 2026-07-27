@@ -148,12 +148,18 @@ def load_relations():
     return {x["name"]: (x["head"], x["tail"]) for x in r["relations"]}
 
 
-def main(n, pages):
+def main(n, pages, splits=("validation", "train")):
+    """문제: validation split(12,576행) 전량을 스캔해도 필터 통과 127개가 자연 상한이라
+    150 목표를 못 채웠다. train split(15,000행)까지 이어서 훑어 후보 풀을 넓힌다 —
+    validation을 먼저 스캔해 기존 mh2w_0000~0126과 동일한 항목이 먼저 채워지도록 순서 유지."""
     llm, _ = make_llm()
     rel = load_relations()
-    rows = fetch_rows(pages)
-    comp = [r for r in rows if r.get("type") == "compositional"]
-    print(f"2Wiki 로드 {len(rows)}행 → compositional {len(comp)}. 목표 {n}문항.")
+    comp = []
+    for split in splits:
+        rows = fetch_rows(pages, split=split)
+        c = [r for r in rows if r.get("type") == "compositional"]
+        comp += c
+        print(f"2Wiki {split} 로드 {len(rows)}행 → compositional {len(c)}(누적 {len(comp)}). 목표 {n}문항.")
 
     gold, corpus_add, seen_pid, seen_fact = [], [], set(), set()
     checked = mapped = ko_ok = 0
