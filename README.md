@@ -27,7 +27,7 @@ flowchart LR
 - [x] W1.1 코퍼스 구축 (10,871문단, KorQuAD + 2Wiki 적응 + 데모용 5문서)
 - [x] W1.2 FAISS 인덱싱(Chroma에서 변경, ADR-11) + 검색 스팟체크
 - [x] W1.3 지식그래프 (전체 코퍼스 22.8배 확대 → 가지치기로 정밀도 70%→**98%** 복구, 6,313노드·5,438엣지)
-- [x] W1.5 Baseline 측정 **(게이트)** — 멀티홉(2Wiki 적응 127문항) Recall@5 40.2% / @10 48.8%
+- [x] W1.5 Baseline 측정 **(게이트)** — 멀티홉(2Wiki 적응 127문항) Hits@5 40.2% / @10 48.8%
 - [x] W2 코어 파이프라인 E2E (분해·그라운딩·검증·재질의·응답조립)
 - [x] 일반 RAG 대조군(`plain_rag.py`) — 시연 대시보드용, 임베딩검색+LLM답변만
 - [x] **W3.4 게이트: 시나리오 B 최초 완전 재현** — 모차르트→bornIn→잘츠부르크→hostsEvent→잘츠부르크 페스티벌, ANSWERED·confidence 0.85·path_check True
@@ -93,7 +93,7 @@ tools/       check_layers.sh (계층 의존 게이트)
 # 데모 UI (시나리오 A/B/C 프리셋, hop trace·검증뱃지·일반 RAG 비교 패널)
 streamlit run apps/streamlit_app.py
 
-# 4-arm 평가 (baseline은 Recall@k, 나머지는 EM)
+# 4-arm 평가 (baseline은 Hits@k, 나머지는 EM)
 python3 eval/run_eval.py --mode baseline --set multi
 python3 eval/run_eval.py --mode agent_basic --set multi
 python3 eval/run_eval.py --mode ours_g --set multi
