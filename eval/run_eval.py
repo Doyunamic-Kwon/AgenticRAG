@@ -74,14 +74,27 @@ def run_baseline(evalset, embedder, index, ids):
 
 
 def load_eval_answers(which):
-    """qid → {answer, aliases} (파이프라인 모드의 EM 채점용, multi 셋만)."""
-    if which != "multi":
-        return {}
-    out = {}
-    for l in open(ROOT / "data/eval/multihop_2wiki.jsonl", encoding="utf-8"):
-        r = json.loads(l)
-        out[r["qid"]] = {r["answer"]} | set(r.get("answer_aliases", []))
-    return out
+    """qid → {answer, aliases} (파이프라인 모드의 EM 채점용).
+    문제: single(KorQuAD)은 여태 여기 연결이 안 돼 있어 agent_basic/ours_g/ours로 돌려도
+    항상 em=None이었다(gold_answers가 항상 빈 dict) — Recall@k만 보던 baseline 모드만
+    KorQuAD를 실제로 채점하고 있었다. KorQuAD도 SQuAD 포맷이라 answers[0].text가 정답
+    원문이라 multi와 동일한 방식으로 채점 가능(alias는 없음, 단일 정답 텍스트만)."""
+    if which == "multi":
+        out = {}
+        for l in open(ROOT / "data/eval/multihop_2wiki.jsonl", encoding="utf-8"):
+            r = json.loads(l)
+            out[r["qid"]] = {r["answer"]} | set(r.get("answer_aliases", []))
+        return out
+    if which == "single":
+        out = {}
+        dev = json.load(open(ROOT / "data/raw/KorQuAD_v1.0_dev.json", encoding="utf-8"))["data"]
+        for doc in dev:
+            for para in doc["paragraphs"]:
+                for qa in para["qas"]:
+                    if qa["answers"]:
+                        out[qa["id"]] = {a["text"] for a in qa["answers"]}
+        return out
+    return {}
 
 
 def _norm(s):
