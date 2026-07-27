@@ -16,7 +16,8 @@ import threading
 import collections
 from openai import OpenAI
 
-_RPM_BUDGET = 70    # 문서상 100의 70% — LLM 쪽 요청과 같은 풀을 공유하므로 여유를 남김
+_RPM_BUDGET = 22    # 2026-07-27: 여러 run_eval.py 프로세스를 동시에 띄울 걸 감안해 실측 100 RPM을
+# 프로세스 수만큼 나눔(각자 독립된 예산 추적이라 안 나누면 합쳐서 실제 한도를 넘긴다)
 _RPM_WINDOW = 60
 
 
