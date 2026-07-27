@@ -158,11 +158,17 @@ def _verify(hop, candidates, pid2text, state, verifier):
 async def resolve_hop(hop, state, verifier=None):
     verifier = verifier or _quad.decide
     llm = state["llm"]
+    tracer = state.get("tracer")                        # 데모 실시간 시각화용(선택 — 없으면 조용히 스킵)
     max_requery = state.get("max_requery", 2)
     tie_epsilon = state.get("tie_epsilon", 0.15)
 
     sub_query = hop["sub_query"]
     queries_used, all_candidates, retries = [sub_query], [], 0
+
+    if tracer:
+        tracer.emit({"type": "hop_start", "hop_id": hop["id"],
+                     "start": hop.get("start_node") or hop.get("start"),
+                     "relation": hop["relation"], "direction": hop["direction"], "sub_query": sub_query})
 
     while True:
         raw, pid2text = _search(hop, sub_query, state)
@@ -170,13 +176,24 @@ async def resolve_hop(hop, state, verifier=None):
         all_candidates.extend(scored)                   # 전량 보존 (ADR-8)
         scored.sort(key=lambda c: c["score"], reverse=True)
 
+        if tracer:
+            for c in scored:
+                tracer.emit({"type": "candidate_verified", "hop_id": hop["id"], "entity": c["entity"],
+                             "origin": c["origin"], "score": c["score"], "verification": c["verification"]})
+
         if scored and scored[0]["verification"]["passed"]:
             tie = len(scored) > 1 and (scored[0]["score"] - scored[1]["score"]) < tie_epsilon
+            if tracer:
+                tracer.emit({"type": "hop_resolved", "hop_id": hop["id"], "status": "OK",
+                             "answer": scored[0]["entity"]})
             return {"hop_id": hop["id"], "answer": scored[0]["entity"], "candidates": all_candidates,
                     "tie": tie, "branched": False, "retries": retries, "status": "OK",
                     "queries_used": queries_used}
 
         if retries >= max_requery:
+            if tracer:
+                tracer.emit({"type": "hop_resolved", "hop_id": hop["id"], "status": "FAILED",
+                             "answer": scored[0]["entity"] if scored else ""})
             return {"hop_id": hop["id"], "answer": scored[0]["entity"] if scored else "",
                     "candidates": all_candidates, "tie": False, "branched": False,
                     "retries": retries, "status": "FAILED", "queries_used": queries_used}
@@ -192,6 +209,8 @@ async def resolve_hop(hop, state, verifier=None):
         sub_query = new_q if (new_q and new_q not in queries_used) else sub_query + " 상세"
         queries_used.append(sub_query)
         retries += 1
+        if tracer:
+            tracer.emit({"type": "requery", "hop_id": hop["id"], "new_query": sub_query})
 
 
 def demo():
