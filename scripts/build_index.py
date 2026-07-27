@@ -5,7 +5,7 @@
 usage:
   python3 scripts/build_index.py --selftest    # API 없이 FAISS 파이프라인 검증(랜덤 벡터)
   python3 scripts/build_index.py                # 실제 인덱싱 (.env 의 임베딩 키 필요)
-  python3 scripts/build_index.py --spotcheck 20 # 인덱싱 후 dev 20문항 Recall@10 목측
+  python3 scripts/build_index.py --spotcheck 20 # 인덱싱 후 dev 20문항 Hits@10 목측
 out: data/index/{faiss.index, ids.jsonl, vectors.npy}
 """
 import sys, os, json, argparse, random
@@ -100,7 +100,7 @@ def main(spotcheck_n):
 
 
 def spotcheck(embedder, index, ids, corpus, n):
-    """dev 질문 n개로 Recall@10 목측. gold = 질문 문맥이 속한 corpus 문단."""
+    """dev 질문 n개로 Hits@10 목측(gold 1개짜리 이진 판정이라 Recall이 아니라 Hits). gold = 질문 문맥이 속한 corpus 문단."""
     text2pid = {c["text"]: c["paragraph_id"] for c in corpus}
     dev = json.load(open(ROOT / "data/raw/KorQuAD_v1.0_dev.json", encoding="utf-8"))["data"]
     samples = []
@@ -123,7 +123,7 @@ def spotcheck(embedder, index, ids, corpus, n):
         r5 += gold in pids[:5]
         r10 += gold in pids[:10]
     m = len(samples)
-    print(f"[스팟체크 n={m}] Recall@1={r1/m:.1%}  @5={r5/m:.1%}  @10={r10/m:.1%} "
+    print(f"[스팟체크 n={m}] Hits@1={r1/m:.1%}  @5={r5/m:.1%}  @10={r10/m:.1%} "
           f"({'통과' if r10 / m >= 0.7 else '미달 → 한국어 특화 임베딩 교체 검토'})")
 
 
